@@ -92,11 +92,11 @@ Builds run natively on an aarch64 host with Docker, from sibling checkouts of om
 
 ```bash
 # Normal image
-bin/omarchy-iso-make --arch aarch64 --platform n1x \
+bin/omarchy-iso-make --arch aarch64 --kernel linux-omarchy-n1x \
   --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
 
 # Dev image: adds key-only SSH for your public key and verbose installer output
-bin/omarchy-iso-make --arch aarch64 --platform n1x --dev-ssh ~/.ssh/id_ed25519.pub --debug \
+bin/omarchy-iso-make --arch aarch64 --kernel linux-omarchy-n1x --dev-ssh ~/.ssh/id_ed25519.pub --debug \
   --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
 ```
 
