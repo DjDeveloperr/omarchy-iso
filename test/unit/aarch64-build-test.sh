@@ -176,6 +176,8 @@ if [[ ! -d /boot/dtbs/qcom ]]; then
 fi
 grep -Fq "chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi" "$ROOT/configs/grub/grub.cfg" || fail "GRUB does not chainload the live UKI"
 grep -Fq "modprobe.blacklist=qcom_q6v5_pas" "$ROOT/configs/grub/grub.cfg" || fail "the live UKI entry loads the DSP driver in the initramfs"
+grep -F 'omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq ' iommu.passthrough=0 ' || fail "the live UKI entry leaves device memory access untranslated"
+grep -Fq '[[ ! -d /boot/dtbs/$1/qcom ]] || dtb_dir=/boot/dtbs/$1/qcom' "$uki" || fail "the live UKI ignores the device trees a kernel keeps under its own name"
 # mkarchiso copies the UKI onto the ISO only with this patch, applied after the GRUB one.
 if [[ -f "$ROOT/archiso/archiso/mkarchiso" ]]; then
   cp "$ROOT/archiso/archiso/mkarchiso" "$fixture/mkarchiso-qualcomm"
@@ -285,6 +287,13 @@ configure_archiso_aarch64_mkinitcpio "$fixture/archiso.conf"
 grep -Eq '^HOOKS=\(' "$fixture/archiso.conf" || fail "live HOOKS line lost"
 grep -Eq 'microcode|memdisk' "$fixture/archiso.conf" && fail "x86-only hooks remain in the aarch64 live initramfs"
 grep -Eq '^HOOKS=\(.*\bplymouth\b' "$fixture/archiso.conf" || fail "Plymouth is missing from the aarch64 live initramfs"
-grep -Fq 'MODULES=(i2c_mt65xx i2c_tegra i2c_hid i2c_hid_acpi hid_generic hid_multitouch)' "$fixture/archiso.conf" || fail "early keyboard modules missing"
+grep -q '^MODULES=(i2c_mt65xx i2c_tegra i2c_hid i2c_hid_acpi hid_generic hid_multitouch ' "$fixture/archiso.conf" || fail "early keyboard modules missing"
+# A Snapdragon laptop's platform drivers, for a kernel that builds them as
+# modules. Each is optional, so a kernel without one still gets its image.
+live_modules=$(sed -n 's/^MODULES=(\(.*\))$/\1/p' "$fixture/archiso.conf")
+for module in gcc-x1e80100 pinctrl-x1e80100 qnoc-x1e80100 spmi-pmic-arb i2c-qcom-geni i2c-hid-of dwc3-qcom phy-qcom-qmp-combo; do
+  [[ " $live_modules " == *" $module? "* ]] || fail "the live initramfs lacks the Snapdragon platform driver $module"
+done
+[[ " $live_modules " != *" qcom_q6v5_pas"* ]] || fail "the live initramfs loads the DSP driver"
 
 echo "aarch64 build overlay tests passed"

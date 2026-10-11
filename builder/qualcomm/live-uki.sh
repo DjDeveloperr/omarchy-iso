@@ -13,17 +13,21 @@ initrd=/boot/initramfs-$1.img
 uki=/boot/omarchy-live.efi
 hwids=/usr/lib/systemd/boot/hwids/aa64
 
+# Arch Linux ARM's kernel keeps every board's device trees in /boot/dtbs.
+# Omarchy's own kernel keeps its Snapdragon ones under its package name.
+dtb_dir=/boot/dtbs/qcom
+[[ ! -d /boot/dtbs/$1/qcom ]] || dtb_dir=/boot/dtbs/$1/qcom
+
 # Include supported Snapdragon generations while staying below the UKI section limit.
 # EL2 variants share hardware IDs with their base DTBs and would be ambiguous.
 shopt -s nullglob
 dtbs=()
-for dtb in /boot/dtbs/qcom/x1*.dtb /boot/dtbs/qcom/hamoa*.dtb \
-           /boot/dtbs/qcom/glymur*.dtb /boot/dtbs/qcom/sc8280xp*.dtb; do
+for dtb in "$dtb_dir"/x1*.dtb "$dtb_dir"/hamoa*.dtb "$dtb_dir"/glymur*.dtb "$dtb_dir"/sc8280xp*.dtb; do
   [[ $dtb == *-el2.dtb ]] && continue
   dtbs+=("$dtb")
 done
 if (( ${#dtbs[@]} == 0 )); then
-  echo "live-uki: $1 ships no Windows-on-ARM device trees under /boot/dtbs/qcom; this image will not boot a Snapdragon laptop"
+  echo "live-uki: $1 ships no Windows-on-ARM device trees under $dtb_dir; this image will not boot a Snapdragon laptop"
   exit 0
 fi
 
