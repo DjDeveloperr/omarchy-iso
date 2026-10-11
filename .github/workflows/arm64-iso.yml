@@ -1,8 +1,8 @@
 name: ARM64 ISO
 
-# Builds the generic aarch64 ISO on a native ARM runner: Arch Linux ARM's
-# kernel, the published edge packages, nothing board-specific. This is the
-# image a VM can boot, so it is the one CI can go on to install and test.
+# Builds the aarch64 ISO on a native ARM runner, on Arch Linux ARM's kernel and
+# the published edge packages: the one image for every board that kernel runs.
+# A VM can boot it, so CI can go on to install and test it.
 #
 # The push trigger exists while this lives on a branch: a manual run needs the
 # workflow on the default branch first.
@@ -47,15 +47,14 @@ jobs:
           path: ~/.cache/omarchy
 
       # The Omarchy packages are built from source, as the N1x image builds
-      # them: the published ones carry no aarch64 pacman configuration, and
-      # until omarchy#14637 reaches edge their installer looks for an x64 Node
-      # tarball on every architecture. omarchy's arm64-generic branch is n1x
-      # plus one line, the installed system's mirrorlist pointed at Omarchy's
-      # own mirror; it goes back to n1x when that line lands there.
+      # them: the published ones carry no aarch64 pacman configuration and none
+      # of the platform support the build asks for, and until omarchy#14637
+      # reaches edge their installer looks for an x64 Node tarball on every
+      # architecture. omarchy's n1x branch has all of it.
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           repository: omacom/omarchy
-          ref: arm64-generic
+          ref: n1x
           path: src/omarchy
           fetch-depth: 0
           persist-credentials: false
@@ -69,7 +68,7 @@ jobs:
       - name: Build the ISO
         run: |
           start=$(date +%s)
-          ./bin/omarchy-iso-make --arch aarch64 --platform generic --no-boot-offer \
+          ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer \
             --local-source src/omarchy src/omarchy-pkgs
           echo "Built in $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
 

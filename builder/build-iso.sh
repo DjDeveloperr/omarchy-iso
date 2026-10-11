@@ -5,7 +5,6 @@ set -e
 OMARCHY_ISO_REF="${OMARCHY_ISO_REF:-quattro}"
 OMARCHY_MIRROR="${OMARCHY_MIRROR:-stable}"
 OMARCHY_ARCH="${OMARCHY_ARCH:-x86_64}"
-OMARCHY_ARM_PLATFORM="${OMARCHY_ARM_PLATFORM:-}"
 OMARCHY_KERNEL="${OMARCHY_KERNEL:-linux-t2}"
 # profiledef.sh reads both in the mkarchiso environment.
 export OMARCHY_ARCH OMARCHY_KERNEL
@@ -17,44 +16,29 @@ source /builder/grub-platform.sh
 
 # The online pacman configuration drives every package download below. On
 # aarch64 it points at Omarchy's edge aarch64 repository and Arch Linux ARM,
-# and for an N1x image at the platform bundle mounted at /packages first.
+# and at a package bundle mounted at /packages first when there is one.
 case "$OMARCHY_ARCH" in
   x86_64)
     online_pacman_conf="/configs/pacman-online-${OMARCHY_MIRROR}.conf"
     ;;
   aarch64)
     online_pacman_conf=/configs/pacman-online-aarch64.conf
-    case "$OMARCHY_ARM_PLATFORM" in
-      n1x)
-        if [[ -z $OMARCHY_KERNEL || ! -f /builder/$OMARCHY_KERNEL.preset ]]; then
-          echo "ERROR: N1x builds need a platform kernel with a live preset (got '$OMARCHY_KERNEL')" >&2
-          exit 1
-        fi
-        if [[ ! -d /packages || ! -f /packages/SHA256SUMS ]]; then
-          echo "ERROR: N1x builds require the platform package bundle mounted at /packages with SHA256SUMS" >&2
-          exit 1
-        fi
-        if [[ ! -d /omarchy-source || ! -d /omarchy-pkgs ]]; then
-          echo "ERROR: N1x builds require --local-source; the platform support is not in the published omarchy packages" >&2
-          exit 1
-        fi
-        ;;
-      generic)
-        # Arch Linux ARM's kernel, the published packages, no bundle.
-        if [[ $OMARCHY_KERNEL != linux-aarch64 ]]; then
-          echo "ERROR: generic aarch64 builds boot linux-aarch64 (got '$OMARCHY_KERNEL')" >&2
-          exit 1
-        fi
-        if [[ -d /packages ]]; then
-          echo "ERROR: generic aarch64 builds take no platform package bundle" >&2
-          exit 1
-        fi
-        ;;
-      *)
-        echo "ERROR: aarch64 builds need OMARCHY_ARM_PLATFORM=n1x or generic (got '$OMARCHY_ARM_PLATFORM')" >&2
-        exit 1
-        ;;
-    esac
+    # One image serves every board, and the kernel is the only thing a build
+    # chooses. linux-aarch64 makes its own live setup
+    # (builder/linux-aarch64-live.sh); another kernel needs a live preset here.
+    if [[ $OMARCHY_KERNEL != linux-aarch64 && ! -f /builder/$OMARCHY_KERNEL.preset ]]; then
+      echo "ERROR: aarch64 builds boot linux-aarch64 or a kernel with a live preset in builder/ (got '$OMARCHY_KERNEL')" >&2
+      exit 1
+    fi
+    # No repository publishes linux-omarchy-n1x yet, so it comes in a bundle.
+    if [[ $OMARCHY_KERNEL == linux-omarchy-n1x && ! -d /packages ]]; then
+      echo "ERROR: linux-omarchy-n1x builds require the package bundle mounted at /packages" >&2
+      exit 1
+    fi
+    if [[ -d /packages && ! -f /packages/SHA256SUMS ]]; then
+      echo "ERROR: the package bundle mounted at /packages needs a SHA256SUMS" >&2
+      exit 1
+    fi
     if [[ $OMARCHY_MIRROR != edge ]]; then
       echo "ERROR: aarch64 builds use the edge channel, the only one Omarchy publishes for aarch64 (got '$OMARCHY_MIRROR')" >&2
       exit 1
@@ -142,6 +126,9 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   mkarchiso_command=/tmp/mkarchiso-aarch64
   cp /archiso/archiso/mkarchiso "$mkarchiso_command"
   patch --batch --forward --fuzz=0 "$mkarchiso_command" </builder/archiso-v87-aarch64-grub.patch
+  # A Snapdragon laptop boots the live system from a UKI built into /boot;
+  # carry it onto the ISO beside the kernel when the build made one.
+  patch --batch --forward --fuzz=0 "$mkarchiso_command" </builder/archiso-v87-aarch64-boot-efi.patch
   chmod 0755 "$mkarchiso_command"
 else
   pacman --noconfirm -Sy archlinux-keyring
@@ -192,8 +179,7 @@ mkdir -p "$build_cache_dir/airootfs/usr/share/omarchy-iso"
 echo "$OMARCHY_MIRROR" > "$build_cache_dir/airootfs/root/omarchy_mirror"
 echo "$OMARCHY_ISO_REF" > "$build_cache_dir/airootfs/root/omarchy_iso_ref"
 echo "$OMARCHY_ARCH" > "$build_cache_dir/airootfs/root/omarchy_arch"
-echo "$OMARCHY_ARM_PLATFORM" > "$build_cache_dir/airootfs/root/omarchy_arm_platform"
-# The kernel the installer puts on the target: the platform kernel on aarch64,
+# The kernel the installer puts on the target: the image's own on aarch64,
 # empty on x86_64, where the installer picks per machine.
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   echo "$OMARCHY_KERNEL" > "$build_cache_dir/airootfs/root/omarchy_kernel"
@@ -217,7 +203,7 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # I2C-HID keyboard modules.
   configure_archiso_aarch64_mkinitcpio "$build_cache_dir/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
   boot_splash_kernel_options="quiet splash "
-  if [[ $OMARCHY_ARM_PLATFORM == generic ]]; then
+  if [[ $OMARCHY_KERNEL == linux-aarch64 ]]; then
     # linux-aarch64 owns its preset and names its image /boot/Image, so the
     # live preset, kernel name and initramfs are made after pacstrap, inside
     # the image.
@@ -231,20 +217,36 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
     # panel, hence console=tty0 acpi=nospcr.
     kernel_options="console=tty0 acpi=nospcr initramfs_async=0"
   fi
+  # Snapdragon firmware hands the kernel no device tree. Once the live kernel
+  # and initramfs exist, wrap them in a UKI that carries the device trees the
+  # kernel package ships; GRUB chainloads it where there is one
+  # (configs/grub/grub.cfg). A kernel that ships none gets no UKI.
+  if [[ -f $build_cache_dir/airootfs/root/customize_airootfs.sh ]]; then
+    mv "$build_cache_dir/airootfs/root/customize_airootfs.sh" "$build_cache_dir/airootfs/root/linux-aarch64-live.sh"
+  fi
+  install -Dm0644 /builder/qualcomm/live-uki.sh "$build_cache_dir/airootfs/root/qualcomm-live-uki.sh"
+  cat >"$build_cache_dir/airootfs/root/customize_airootfs.sh" <<CUSTOMIZE
+#!/bin/bash
+set -euo pipefail
+[[ ! -f /root/linux-aarch64-live.sh ]] || bash /root/linux-aarch64-live.sh
+bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL
+rm -f /root/linux-aarch64-live.sh /root/qualcomm-live-uki.sh
+CUSTOMIZE
+  chmod 0755 "$build_cache_dir/airootfs/root/customize_airootfs.sh"
   rm -rf "$build_cache_dir/syslinux" "$build_cache_dir/efiboot"
 else
   boot_splash_kernel_options="quiet splash "
   kernel_options="xe.enable_panel_replay=0 initramfs_async=0"
 fi
 for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg"; do
-  configure_grub_platform "$grub_config" "$OMARCHY_ARM_PLATFORM"
+  configure_grub_kernel "$grub_config" "$OMARCHY_KERNEL"
   sed -i \
     -e "s|%KERNEL%|$OMARCHY_KERNEL|g" \
     -e "s|%BOOT_SPLASH_KERNEL_OPTIONS%|$boot_splash_kernel_options|g" \
     -e "s|%KERNEL_OPTIONS%|$kernel_options|g" \
     "$grub_config"
 done
-if [[ $OMARCHY_ARM_PLATFORM == n1x ]]; then
+if [[ $OMARCHY_KERNEL == linux-omarchy-n1x ]]; then
   # The live system's name on the network (releng's Ethernet DHCP with mDNS).
   printf '%s\n' omarchy-n1x-rescue >"$build_cache_dir/airootfs/etc/hostname"
 fi
@@ -252,8 +254,8 @@ if [[ -n ${OMARCHY_N1X_DEV_SSH:-} ]]; then
   # DEV ONLY (--dev-ssh): key-only SSH into the live ISO and the installed
   # system. See builder/n1x-dev-ssh/omarchy-n1x-dev-ssh; removing that
   # directory and this block removes it.
-  if [[ $OMARCHY_ARM_PLATFORM != n1x ]]; then
-    echo "ERROR: --dev-ssh is only for N1x images" >&2
+  if [[ $OMARCHY_KERNEL != linux-omarchy-n1x ]]; then
+    echo "ERROR: --dev-ssh is only for images on linux-omarchy-n1x" >&2
     exit 1
   fi
   install -Dm0755 /builder/n1x-dev-ssh/omarchy-n1x-dev-ssh "$build_cache_dir/airootfs/usr/local/sbin/omarchy-n1x-dev-ssh"
@@ -299,15 +301,16 @@ if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
   bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
   LOCAL_OMARCHY_BUILD=1
 
-  # The N1x boots like the x86_64 machines: the installer reads the Limine
-  # template, and the target needs the initramfs hooks and Limine drop-ins.
-  # The installer adds the Limine/Snapper stack itself on aarch64, where the
-  # runtime does not depend on it because Apple Silicon boots differently.
-  if [[ $OMARCHY_ARM_PLATFORM == n1x ]]; then
+  # Every board this image installs boots like the x86_64 machines: the
+  # installer reads the Limine template, and the target needs the initramfs
+  # hooks and Limine drop-ins. The installer adds the Limine/Snapper stack
+  # itself on aarch64, where the runtime does not depend on it because Apple
+  # Silicon boots differently.
+  if [[ $OMARCHY_ARCH == aarch64 ]]; then
     settings_archive=$(find "$offline_mirror_dir" -maxdepth 1 -name "$OMARCHY_SETTINGS_PACKAGE-[0-9]*.pkg.tar.*" ! -name '*.sig' | head -1)
     for required in usr/share/omarchy/default/limine/default.conf etc/mkinitcpio.conf.d/omarchy_hooks.conf etc/limine-entry-tool.d/omarchy-defaults.conf; do
       if ! bsdtar -tf "$settings_archive" "$required" >/dev/null 2>&1; then
-        echo "ERROR: ${settings_archive:-$OMARCHY_SETTINGS_PACKAGE} lacks $required, which the N1x install needs" >&2
+        echo "ERROR: ${settings_archive:-$OMARCHY_SETTINGS_PACKAGE} lacks $required, which an aarch64 install needs" >&2
         exit 1
       fi
     done
@@ -335,7 +338,9 @@ cp "/tmp/$NODE_FILENAME" "$build_cache_dir/airootfs/opt/packages/"
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # Plymouth stays out of the live initramfs (archiso-aarch64-mkinitcpio.sh);
   # openssh and pciutils serve the recovery entry and remote debugging.
-  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
+  # For the Snapdragon laptops: ukify builds the live UKI, and the installer
+  # saves a laptop's signed firmware from Windows with qcom-firmware-extract.
+  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted systemd-ukify linux-firmware-qcom qcom-firmware-extract)
 else
   arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
 fi
@@ -383,40 +388,95 @@ else
   # actionable error below.
   bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/install/provisioning/setup-form.sh 2>/dev/null || true
   setup_form=/tmp/omarchy-pkglists/usr/share/omarchy/install/provisioning/setup-form.sh
-  # Runtimes from before the platform lists ship neither, so each is optional.
-  for platform_list in omarchy-aarch64.packages "omarchy-aarch64-$OMARCHY_ARM_PLATFORM.packages" omarchy-x86_64-only.packages; do
+  # The aarch64 list, each platform's own and the x86_64-only one. Runtimes
+  # from before the platform lists ship none, so each is optional.
+  for platform_list in 'omarchy-aarch64*.packages' omarchy-x86_64-only.packages; do
     bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists "usr/share/omarchy/install/$platform_list" 2>/dev/null || true
   done
+  bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/bin/omarchy-hw-platform 2>/dev/null || true
 fi
 
-# aarch64 takes the runtime's own default set, as omarchy-pkg-defaults composes
-# it: the base list, then the aarch64 additions (zram-generator, rtkit) and the
-# platform's own (the N1x kernel and NVIDIA stack), minus the base packages with
-# no aarch64 build anywhere (superwhisper-bin, say).
+# One aarch64 image serves every board, so the runtime it installs has to tell
+# them apart and carry each one's setup and packages. Refuse a runtime from
+# before the platform detector, the Snapdragon setup or a platform's package
+# list: a Snapdragon laptop installed from it would have no device tree to boot
+# with, and a GB10 or an N1x would get none of its own packages.
+platform_lists=()
+if [[ $OMARCHY_ARCH == aarch64 ]]; then
+  for required in bin/omarchy-hw-platform install/hardware/qualcomm/dtb-uki.sh \
+    install/omarchy-aarch64-qualcomm.packages install/omarchy-aarch64-n1x.packages \
+    install/omarchy-aarch64-gb10.packages; do
+    if [[ -d /omarchy-source ]]; then
+      [[ -f /omarchy-source/$required ]]
+    else
+      bsdtar -tf "$omarchy_pkg" "usr/share/omarchy/$required" >/dev/null 2>&1
+    fi || {
+      echo "ERROR: the Omarchy runtime for this image ships no $required." >&2
+      echo "       The installer asks the runtime's detector which board it is on and installs" >&2
+      echo "       that platform's packages, and a Snapdragon laptop boots only with the device" >&2
+      echo "       trees its hardware setup lists." >&2
+      echo "       Build with --local-source against a checkout that has the platform support." >&2
+      exit 1
+    }
+  done
+  if [[ -d /omarchy-source ]]; then
+    hw_platform=/omarchy-source/bin/omarchy-hw-platform
+  else
+    hw_platform=/tmp/omarchy-pkglists/usr/share/omarchy/bin/omarchy-hw-platform
+  fi
+fi
+
+# aarch64 takes the runtime's own default sets, as omarchy-pkg-defaults composes
+# them: the base list, then the aarch64 additions (zram-generator, rtkit) and a
+# platform's own (the N1x kernel and NVIDIA stack, say), minus the base packages
+# with no aarch64 build anywhere (superwhisper-bin, say). The installer asks the
+# machine which platform it is on and installs that platform's set, so the image
+# carries one list per platform and the plain aarch64 one for every other
+# machine. Apple Silicon is installed from macOS, never from this image.
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   pkglist_dir=$(dirname "${base_pkg_lists[0]}")
+  aarch64_default_set() {
+    grep -hv '^#\|^$' "$@" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' |
+      awk -v skips="$pkglist_dir/omarchy-x86_64-only.packages" '
+        BEGIN { while ((getline line < skips) > 0) { sub(/[ \t]*#.*$/, "", line); if (line != "") skip[line] = 1 } }
+        skip[$0] { print "aarch64: excluding " $0 ", which the runtime marks x86_64-only" > "/dev/stderr"; next }
+        !seen[$0]++'
+  }
+  aarch64_lists=("${base_pkg_lists[0]}")
+  [[ ! -f $pkglist_dir/omarchy-aarch64.packages ]] || aarch64_lists+=("$pkglist_dir/omarchy-aarch64.packages")
+  platform_base_dir=/tmp/omarchy-platform-base
+  rm -rf "$platform_base_dir"
+  mkdir -p "$platform_base_dir"
+  for platform_list in "$pkglist_dir"/omarchy-aarch64-*.packages; do
+    [[ -f $platform_list && $platform_list != */omarchy-aarch64-apple.packages ]] || continue
+    platform_lists+=("$platform_list")
+    platform=${platform_list##*/omarchy-}
+    aarch64_default_set "${aarch64_lists[@]}" "$platform_list" 2>/dev/null >"$platform_base_dir/omarchy-base.${platform%.packages}.packages"
+  done
   aarch64_base_list=/tmp/omarchy-aarch64-base.packages
-  {
-    grep -hv '^#\|^$' "${base_pkg_lists[0]}"
-    [[ ! -f $pkglist_dir/omarchy-aarch64.packages ]] || grep -hv '^#\|^$' "$pkglist_dir/omarchy-aarch64.packages"
-    [[ ! -f $pkglist_dir/omarchy-aarch64-$OMARCHY_ARM_PLATFORM.packages ]] ||
-      grep -hv '^#\|^$' "$pkglist_dir/omarchy-aarch64-$OMARCHY_ARM_PLATFORM.packages"
-  } | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' |
-    awk -v skips="$pkglist_dir/omarchy-x86_64-only.packages" '
-      BEGIN { while ((getline line < skips) > 0) { sub(/[ \t]*#.*$/, "", line); if (line != "") skip[line] = 1 } }
-      skip[$0] { print "aarch64: excluding " $0 ", which the runtime marks x86_64-only" > "/dev/stderr"; next }
-      !seen[$0]++' >"$aarch64_base_list"
+  aarch64_default_set "${aarch64_lists[@]}" >"$aarch64_base_list"
   base_pkg_lists[0]=$aarch64_base_list
 fi
 
 mkdir -p "$build_cache_dir/airootfs/usr/share/omarchy-iso"
 cp "${base_pkg_lists[0]}" "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
 cp "${base_pkg_lists[1]}" "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-other.packages"
+shipped_lists=(omarchy-base.packages omarchy-other.packages)
+if [[ $OMARCHY_ARCH == aarch64 ]]; then
+  # The runtime's own detector, which stands alone wherever a copy of it is
+  # shipped, and the default set of each platform it can name.
+  install -Dm0644 "$hw_platform" "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-hw-platform"
+  for platform_base in "$platform_base_dir"/omarchy-base.*.packages; do
+    [[ -f $platform_base ]] || continue
+    cp "$platform_base" "$build_cache_dir/airootfs/usr/share/omarchy-iso/"
+    shipped_lists+=("${platform_base##*/}")
+  done
+fi
 # The installer reads the shipped copies to pacstrap the target, so on aarch64
 # they must carry the same substitutions the offline mirror was built with.
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   source /builder/aarch64-package-filter.sh
-  for shipped_list in omarchy-base.packages omarchy-other.packages; do
+  for shipped_list in "${shipped_lists[@]}"; do
     shipped_path="$build_cache_dir/airootfs/usr/share/omarchy-iso/$shipped_list"
     mapfile -t shipped_packages < <(grep -hv '^#\|^$' "$shipped_path")
     filter_aarch64_packages "$OMARCHY_KERNEL" "${shipped_packages[@]}" > "$shipped_path"
@@ -454,7 +514,7 @@ declare -a all_packages
 mapfile -t all_packages < <(
   {
     cat "$live_packages_file"
-    grep -hv '^#\|^$' "${base_pkg_lists[@]}"
+    grep -hv '^#\|^$' "${base_pkg_lists[@]}" "${platform_lists[@]}"
     grep -hv '^#\|^$' /builder/archinstall.packages
     # Always include the selected Omarchy packages so the target install can
     # find the runtime and companion packages in the offline mirror.
@@ -486,18 +546,16 @@ mapfile -t all_packages < <(
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   source /builder/aarch64-package-filter.sh
   mapfile -t all_packages < <(filter_aarch64_packages "$OMARCHY_KERNEL" "${all_packages[@]}")
-  # The platform kernel pair and the Limine/Snapper stack the installer adds
-  # on aarch64. An N1x image adds everything else in the bundle (the ASUS
-  # ProArt P14's amplifier firmware, say) and the NVIDIA stack the runtime's
-  # platform script installs.
+  # The kernel pair and the Limine/Snapper stack the installer adds on aarch64,
+  # and everything in a package bundle (the ASUS ProArt P14's amplifier
+  # firmware, say). Each platform's own packages come from its list above.
   platform_packages=()
-  if [[ $OMARCHY_ARM_PLATFORM == n1x ]]; then
+  if [[ -d /packages ]]; then
     mapfile -t platform_packages < <(
       for archive in /packages/*.pkg.tar.*; do
         [[ $archive == *.sig ]] || pacman -Qqp "$archive"
       done
     )
-    platform_packages+=(nvidia-open-dkms nvidia-utils libva-nvidia-driver)
   fi
   all_packages+=("$OMARCHY_KERNEL" "$OMARCHY_KERNEL-headers" "${platform_packages[@]}" archlinuxarm-keyring limine limine-mkinitcpio-hook limine-snapper-sync snapper pciutils)
   mapfile -t all_packages < <(printf '%s\n' "${all_packages[@]}" | sort -u)
@@ -595,6 +653,7 @@ ln -sf "$offline_mirror_dir" /var/cache/omarchy/mirror/offline
 # The early-bootstrap set is already inside this closure, so restating it would
 # only add a second list to drift.
 resolve_expected_packages() {
+  local base_list=$1
   local resolve_root=/tmp/omarchy-expected-packages
   local resolved
   local -a targets
@@ -607,8 +666,7 @@ resolve_expected_packages() {
       grep -hv '^#\|^$' "$archinstall_packages_file"
       # Read the shipped copy, which is what _runtime_package_list reads at
       # install time, not the build-time source it came from.
-      grep -hv '^#\|^$' \
-        "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
+      grep -hv '^#\|^$' "$base_list"
       printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" \
         "$OMARCHY_NVIM_PACKAGE"
     } | sort -u
@@ -631,22 +689,30 @@ resolve_expected_packages() {
 # Worth failing the build over: -S --print only aborts when a target is missing
 # from the offline repo, which would fail pacstrap the same way. A count that
 # merely looks wrong is not — the dashboard falls back without the file.
-if ! expected_packages="$(resolve_expected_packages)"; then
-  echo "ERROR: could not resolve the target package count from the offline mirror." >&2
-  echo "       pacman -S --print aborts the whole transaction if any single target" >&2
-  echo "       is missing, so this almost certainly means pacstrap would fail the" >&2
-  echo "       same way at install time." >&2
-  exit 1
-fi
-if (( expected_packages < 600 || expected_packages > 2000 )); then
-  echo "WARNING: resolved target package count $expected_packages is outside the" >&2
-  echo "         expected 600-2000 range; shipping no denominator so the install" >&2
-  echo "         dashboard falls back to its time-based curve." >&2
-else
-  printf '%s\n' "$expected_packages" \
-    >"$build_cache_dir/airootfs/usr/share/omarchy-iso/expected-packages"
-  echo "Target install resolves to $expected_packages packages."
-fi
+#
+# One denominator for each default set the installer can pick: the plain one,
+# and on aarch64 each platform's, so a platform whose packages the mirror lacks
+# stops the build here and not an install on that platform.
+for base_list in "$build_cache_dir"/airootfs/usr/share/omarchy-iso/omarchy-base*.packages; do
+  expected_file=${base_list##*/omarchy-base}
+  expected_file=expected-packages${expected_file%.packages}
+  if ! expected_packages="$(resolve_expected_packages "$base_list")"; then
+    echo "ERROR: could not resolve the target package count for ${base_list##*/} from the offline mirror." >&2
+    echo "       pacman -S --print aborts the whole transaction if any single target" >&2
+    echo "       is missing, so this almost certainly means pacstrap would fail the" >&2
+    echo "       same way at install time." >&2
+    exit 1
+  fi
+  if (( expected_packages < 600 || expected_packages > 2000 )); then
+    echo "WARNING: resolved target package count $expected_packages for ${base_list##*/} is outside" >&2
+    echo "         the expected 600-2000 range; shipping no denominator so the install" >&2
+    echo "         dashboard falls back to its time-based curve." >&2
+  else
+    printf '%s\n' "$expected_packages" \
+      >"$build_cache_dir/airootfs/usr/share/omarchy-iso/$expected_file"
+    echo "Target install from ${base_list##*/} resolves to $expected_packages packages."
+  fi
+done
 
 # Live ISO uses the same offline pacman.conf.
 cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.conf"

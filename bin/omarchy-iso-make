@@ -7,7 +7,7 @@ KEEP_PKG_CACHE=""
 LOCAL_OMARCHY_PATH=""
 LOCAL_PKGS_PATH=""
 OMARCHY_ARCH="${OMARCHY_ARCH:-x86_64}"
-OMARCHY_ARM_PLATFORM=""
+ARM_KERNEL=""
 N1X_DEV_SSH_KEY=""
 PACKAGE_DIR=""
 while [[ $# -gt 0 ]]; do
@@ -23,19 +23,17 @@ while [[ $# -gt 0 ]]; do
     esac
     shift 2
     ;;
-  --platform)
-    # What the aarch64 image is built for. n1x is the NVIDIA N1x laptop: the
-    # linux-omarchy-n1x kernel and the hardware-probe recovery entry. generic
-    # is any machine whose firmware describes its hardware (VMs, servers):
-    # Arch Linux ARM's linux-aarch64 kernel and nothing board-specific.
-    OMARCHY_ARM_PLATFORM="${2:-}"
-    case "$OMARCHY_ARM_PLATFORM" in
-    n1x|generic) ;;
-    *)
-      echo "Error: --platform must be n1x or generic" >&2
+  --kernel)
+    # The kernel an aarch64 image boots and installs. One image serves every
+    # board and the installer asks the machine which one it is on, so the kernel
+    # is the only choice left to the build. The default is Arch Linux ARM's
+    # linux-aarch64. linux-omarchy-n1x is the kernel the NVIDIA N1x laptops
+    # need; no repository publishes it yet, so it comes with --package-dir.
+    ARM_KERNEL="${2:-}"
+    if [[ -z $ARM_KERNEL ]]; then
+      echo "Error: --kernel requires a kernel package name" >&2
       exit 1
-      ;;
-    esac
+    fi
     shift 2
     ;;
   --dev-ssh)
@@ -49,9 +47,9 @@ while [[ $# -gt 0 ]]; do
     shift 2
     ;;
   --package-dir)
-    # The platform's own aarch64 packages, which no repository publishes: its
-    # kernel and headers, plus anything pinned to a version proven on the
-    # hardware. The directory must carry a SHA256SUMS covering every archive.
+    # aarch64 packages no repository publishes: a kernel and its headers, plus
+    # anything pinned to a version proven on the hardware. The directory must
+    # carry a SHA256SUMS covering every archive.
     PACKAGE_DIR="${2:-}"
     if [[ -z $PACKAGE_DIR ]]; then
       echo "Error: --package-dir requires a directory" >&2
@@ -109,8 +107,7 @@ while [[ $# -gt 0 ]]; do
   *)
     echo "Unknown option: $1"
     echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
-    echo "       $0 --arch aarch64 --platform n1x [--dev-ssh <pubkey>] --package-dir DIR --local-source <omarchy-checkout> <pkgs-checkout> [...]"
-    echo "       $0 --arch aarch64 --platform generic --edge [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
+    echo "       $0 --arch aarch64 --edge [--kernel <package> --package-dir DIR] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
     exit 1
     ;;
   esac
@@ -124,30 +121,18 @@ if [[ -n $LOCAL_OMARCHY_PATH ]]; then
 fi
 
 # Architecture selection. x86_64 is unchanged. aarch64 builds run in a pinned
-# Arch Linux ARM container against Omarchy's edge aarch64 repository. An N1x
-# image also needs the platform package bundle, and builds the omarchy*
-# packages from --local-source because the platform support is not in the
-# published ones. A generic image needs neither: it is the published packages
-# on a stock kernel.
+# Arch Linux ARM container against Omarchy's edge aarch64 repository, and make
+# one image for every board. linux-omarchy-n1x also needs the package bundle
+# that carries it, since no repository publishes that kernel yet. build-iso.sh
+# refuses a runtime without the platform support, which today means
+# --local-source against a checkout that has it.
 CONTAINER_IMAGE=ghcr.io/archlinux/archlinux:latest
 CONTAINER_PLATFORM_ARGS=()
 OMARCHY_KERNEL=linux-t2
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
-  if [[ -z $OMARCHY_ARM_PLATFORM ]]; then
-    echo "Error: --arch aarch64 requires --platform n1x or --platform generic" >&2
-    exit 1
-  fi
-  if [[ $OMARCHY_ARM_PLATFORM == n1x ]]; then
-    if [[ -z $PACKAGE_DIR ]]; then
-      echo "Error: --arch aarch64 requires --package-dir DIR" >&2
-      exit 1
-    fi
-    if [[ -z $LOCAL_OMARCHY_PATH ]]; then
-      echo "Error: --arch aarch64 requires --local-source; the published omarchy packages lack the platform support" >&2
-      exit 1
-    fi
-  elif [[ -n $PACKAGE_DIR || -n $N1X_DEV_SSH_KEY ]]; then
-    echo "Error: --package-dir and --dev-ssh are only valid with --platform n1x" >&2
+  OMARCHY_KERNEL=${ARM_KERNEL:-linux-aarch64}
+  if [[ $OMARCHY_KERNEL == linux-omarchy-n1x && -z $PACKAGE_DIR ]]; then
+    echo "Error: --kernel linux-omarchy-n1x requires --package-dir DIR; no repository publishes that kernel yet" >&2
     exit 1
   fi
   if [[ ${OMARCHY_MIRROR:-} != edge ]]; then
@@ -166,10 +151,6 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
       exit 1
     fi
   fi
-  case $OMARCHY_ARM_PLATFORM in
-  n1x) OMARCHY_KERNEL=linux-omarchy-n1x ;;
-  generic) OMARCHY_KERNEL=linux-aarch64 ;;
-  esac
   if [[ -n $N1X_DEV_SSH_KEY ]]; then
     [[ -f $N1X_DEV_SSH_KEY ]] || { echo "Error: SSH public key not found at $N1X_DEV_SSH_KEY" >&2; exit 1; }
     N1X_DEV_SSH_KEY=$(realpath "$N1X_DEV_SSH_KEY")
@@ -182,8 +163,8 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # so a mutable third-party tag is not acceptable.
   CONTAINER_IMAGE=menci/archlinuxarm@sha256:3e1074c407fc1a57c2a2117af6920c96a7cc906fa6f1f2da8a4a7fd3aa2c2f4e
   CONTAINER_PLATFORM_ARGS=(--platform linux/arm64)
-elif [[ -n $OMARCHY_ARM_PLATFORM || -n $PACKAGE_DIR || -n $N1X_DEV_SSH_KEY ]]; then
-  echo "Error: --platform, --package-dir and --dev-ssh are only valid with --arch aarch64" >&2
+elif [[ -n $ARM_KERNEL || -n $PACKAGE_DIR || -n $N1X_DEV_SSH_KEY ]]; then
+  echo "Error: --kernel, --package-dir and --dev-ssh are only valid with --arch aarch64" >&2
   exit 1
 fi
 
@@ -243,7 +224,6 @@ DOCKER_ARGS=(
   -e "OMARCHY_MIRROR=$OMARCHY_MIRROR"
   -e "OMARCHY_INSTALL_DEBUG=${OMARCHY_INSTALL_DEBUG:-}"
   -e "OMARCHY_ARCH=$OMARCHY_ARCH"
-  -e "OMARCHY_ARM_PLATFORM=$OMARCHY_ARM_PLATFORM"
   -e "OMARCHY_KERNEL=$OMARCHY_KERNEL"
   -e "OMARCHY_N1X_DEV_SSH=${N1X_DEV_SSH_KEY:+1}"
   # Optional overrides of the Omarchy package pair build-iso.sh installs, e.g.
@@ -310,7 +290,7 @@ fi
 
 latest_iso=$(\ls -t "$BUILD_RELEASE_PATH"/*.iso | head -n1)
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
-  iso_ref="${latest_iso%.*}-$OMARCHY_ARM_PLATFORM${N1X_DEV_SSH_KEY:+-devssh}-$OMARCHY_ISO_REF.iso"
+  iso_ref="${latest_iso%.*}${ARM_KERNEL:+-${ARM_KERNEL#linux-}}${N1X_DEV_SSH_KEY:+-devssh}-$OMARCHY_ISO_REF.iso"
 else
   iso_ref="${latest_iso%.*}-$OMARCHY_ISO_REF.iso"
 fi

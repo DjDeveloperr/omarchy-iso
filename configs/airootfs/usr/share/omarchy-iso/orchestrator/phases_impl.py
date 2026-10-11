@@ -36,7 +36,7 @@ from pathlib import Path
 
 from . import archinstall_adapter as arch
 from .command import capture, capture_identifier, require_text
-from .context import InstallContext, iso_arm_platform, iso_kernel
+from .context import InstallContext, hw_platform, iso_kernel
 from .keyboard import configure_keyboard
 from .ui import error, info
 
@@ -311,8 +311,9 @@ def arch_install_system(ctx: InstallContext) -> None:
                 info("› installing archinstall application selections")
                 arch.install_applications(installer, config)
 
-            info("› installing Omarchy runtime + omarchy-base.packages")
-            installer.add_additional_packages(_runtime_package_list(ctx))
+            base_pkgs_file = _base_package_file()
+            info(f"› installing Omarchy runtime + {base_pkgs_file.name}")
+            installer.add_additional_packages(_runtime_package_list(ctx, base_pkgs_file))
 
             # Tailscale is bundled in the offline mirror but only installed
             # when an autoinstall drive staged an auth key; must happen here,
@@ -771,10 +772,21 @@ def _unmask_mkinitcpio_pacman_hooks(
             info(f"warning: failed to restore pacman hook mask for {name}: {exc}")
 
 
-def _runtime_package_list(ctx: InstallContext) -> list[str]:
+def _base_package_file(share: Path = Path("/usr/share/omarchy-iso")) -> Path:
+    """The default set for the platform this machine is, where the image
+    carries one for it; the plain list for every other machine."""
+    detected = hw_platform()
+    platform_list = share / f"omarchy-base.{detected}.packages"
+    if detected and platform_list.is_file():
+        return platform_list
+    return share / "omarchy-base.packages"
+
+
+def _runtime_package_list(ctx: InstallContext, base_pkgs_file: Path | None = None) -> list[str]:
     """Selected Omarchy runtime package + every package in the ISO-bundled
     base package list that isn't already installed early."""
-    base_pkgs_file = Path("/usr/share/omarchy-iso/omarchy-base.packages")
+    if base_pkgs_file is None:
+        base_pkgs_file = _base_package_file()
     pkgs = [_omarchy_runtime_package()]
     already_installed = set(_early_packages()) | {
         _omarchy_runtime_package(),
@@ -1889,22 +1901,19 @@ def _limine_entries(limine_conf_text: str) -> list[tuple[str, dict[str, str]]]:
 
 
 def _installed_arm_platform(ctx: InstallContext) -> str:
-    """The board an aarch64 image was built for, when the target really is one.
+    """"n1x" when the machine being installed is one, as the target's own
+    detector says.
 
     The platform's boot contract comes from its hardware script, which only runs
-    on that hardware; an N1x image installed in a VM gets a generic aarch64
-    setup and is validated as one. The target's own detector decides."""
-    arm_platform = iso_arm_platform()
-    if arm_platform != "n1x":
-        return arm_platform
+    on that hardware; any other machine gets its own setup and is validated as
+    such."""
+    if platform.machine() != "aarch64":
+        return ""
     detected = subprocess.run(
         ["arch-chroot", str(ctx.target), "omarchy-hw-n1x"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    if detected.returncode != 0:
-        info("Not N1x hardware; skipping the N1x boot entry checks")
-        return ""
-    return arm_platform
+    return "n1x" if detected.returncode == 0 else ""
 
 
 def _validate_platform_boot_entries(limine_conf_text: str, arm_platform: str, kernel: str = "") -> None:

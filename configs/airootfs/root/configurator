@@ -410,13 +410,11 @@ to_gb() {
   awk -v bytes="$1" 'BEGIN {printf "%.1fGB", bytes/1024/1024/1024}'
 }
 
-# The ISO build records its architecture and, on aarch64, the board platform
-# the image was built for (see build-iso.sh). x86_64 images carry an empty
-# platform.
+# The ISO build records its architecture and, on aarch64, the kernel the image
+# boots and installs (see build-iso.sh). One aarch64 image serves every board.
 iso_arch=$(cat /root/omarchy_arch 2>/dev/null || uname -m)
-iso_platform=$(cat /root/omarchy_arm_platform 2>/dev/null || true)
-if [[ $iso_arch == aarch64 && ( -z $iso_platform || ! -s /root/omarchy_kernel ) ]]; then
-  echo "Error: this aarch64 ISO does not record the platform and kernel it was built for" >&2
+if [[ $iso_arch == aarch64 && ! -s /root/omarchy_kernel ]]; then
+  echo "Error: this aarch64 ISO does not record the kernel it was built with" >&2
   exit 1
 fi
 

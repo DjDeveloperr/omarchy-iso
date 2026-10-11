@@ -21,6 +21,17 @@ filter_aarch64_packages() {
         echo "aarch64: replacing $package with $kernel-headers" >&2
         printf '%s\n' "$kernel-headers"
         ;;
+      linux-omarchy-n1x|linux-omarchy-n1x-headers)
+        # Only the N1x list names this kernel. An image on another kernel
+        # cannot run an N1x and no repository publishes this one, so the image's
+        # own kernel stands in for it.
+        if [[ $kernel == linux-omarchy-n1x ]]; then
+          printf '%s\n' "$package"
+        else
+          echo "aarch64: replacing $package with ${package/linux-omarchy-n1x/$kernel}" >&2
+          printf '%s\n' "${package/linux-omarchy-n1x/$kernel}"
+        fi
+        ;;
       nvim)
         # Arch Linux ARM still ships Neovim under its previous name.
         echo "aarch64: replacing $package with neovim" >&2
