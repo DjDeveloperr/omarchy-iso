@@ -1,4 +1,4 @@
-"""Exercise recovery against a synthetic installed tree, without touching disks.
+"""Exercise chroot against a synthetic installed tree, without touching disks.
 
 Only the privileged command boundary is replaced. Real files, path checks,
 fstab planning, mount ownership and error unwinding run normally.
@@ -19,7 +19,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "configs/airootfs/usr/share/omarchy-iso"))
-import recovery
+import chroot
 
 
 def node(name, fstype="btrfs", **kw):
@@ -31,7 +31,7 @@ def entry(source, target, fstype="btrfs", options="defaults"):
     return dict(source=source, target=target, fstype=fstype, options=options)
 
 
-class RecoveryTest(unittest.TestCase):
+class ChrootTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -40,7 +40,7 @@ class RecoveryTest(unittest.TestCase):
         self.offline = self.base / "offline"
         self.offline.mkdir()
         (self.offline / "kernel.pkg.tar.zst").write_text("iso package")
-        self.session = recovery.Recovery(self.target, offline=self.offline)
+        self.session = chroot.Chroot(self.target, offline=self.offline)
         self.nodes = [node("/dev/root-part", "crypto_LUKS"), node("/dev/boot-part", "vfat")]
         self.entries = [
             entry("UUID=root", "/", options="rw,subvol=/@"),
@@ -59,10 +59,10 @@ class RecoveryTest(unittest.TestCase):
         self.root_is_valid = True
         self.log = io.StringIO()
         patches = [
-            mock.patch.object(recovery, "run", side_effect=self.run_command),
-            mock.patch.object(recovery, "devices", side_effect=lambda: self.nodes),
-            mock.patch.object(recovery.os, "geteuid", return_value=0),
-            mock.patch.object(recovery.sys.stdin, "isatty", return_value=True),
+            mock.patch.object(chroot, "run", side_effect=self.run_command),
+            mock.patch.object(chroot, "devices", side_effect=lambda: self.nodes),
+            mock.patch.object(chroot.os, "geteuid", return_value=0),
+            mock.patch.object(chroot.sys.stdin, "isatty", return_value=True),
             mock.patch.object(Path, "stat", autospec=True, side_effect=self.path_stat),
             mock.patch.object(Path, "exists", autospec=True, side_effect=self.path_exists),
         ]
@@ -76,7 +76,7 @@ class RecoveryTest(unittest.TestCase):
         self.addCleanup(redirect.__exit__, None, None, None)
 
     def path_stat(self, path, *args, **kwargs):
-        if str(path).startswith("/dev/mapper/omarchy-recovery-") and not self.mapping_exists:
+        if str(path).startswith("/dev/mapper/omarchy-chroot-") and not self.mapping_exists:
             raise FileNotFoundError(str(path))
         if str(path).startswith("/dev/"):
             result = mock.Mock(st_mode=stat.S_IFBLK | 0o600)
@@ -84,7 +84,7 @@ class RecoveryTest(unittest.TestCase):
         return self.real_stat(path, *args, **kwargs)
 
     def path_exists(self, path, *args, **kwargs):
-        if str(path).startswith("/dev/mapper/omarchy-recovery-"):
+        if str(path).startswith("/dev/mapper/omarchy-chroot-"):
             return self.mapping_exists
         return self.real_exists(path, *args, **kwargs)
 
@@ -93,7 +93,7 @@ class RecoveryTest(unittest.TestCase):
         self.calls.append(args)
         if self.fail(args):
             if check:
-                raise recovery.RecoveryError(f"Injected failure: {args}")
+                raise chroot.ChrootError(f"Injected failure: {args}")
             return subprocess.CompletedProcess(args, 1, "", "busy")
         output = ""
         if args[0] == "findmnt":
@@ -123,7 +123,7 @@ class RecoveryTest(unittest.TestCase):
         self.session.mount_installation()
 
     def main(self, *args):
-        return recovery.main(["--root", "/dev/root-part", "--mountpoint", str(self.target), "--no-offline", *args])
+        return chroot.main(["--root", "/dev/root-part", "--mountpoint", str(self.target), "--no-offline", *args])
 
     def test_encrypted_root_mounts_boot_and_cache_before_chroot(self):
         self.prepare()
@@ -135,7 +135,7 @@ class RecoveryTest(unittest.TestCase):
         self.assertLess(targets.index(str(self.target / "boot")), targets.index(str(self.target / "var/cache/pacman/pkg")))
         self.assertIn(("mount", "-t", "btrfs", "-o", "rw,subvol=/@pkg", "--",
                        self.session.root_device, str(self.target / "var/cache/pacman/pkg")), self.calls)
-        mirror = str(self.target) + str(recovery.OFFLINE_MIRROR)
+        mirror = str(self.target) + str(chroot.OFFLINE_MIRROR)
         self.assertIn(("mount", "--bind", "--", str(self.offline), mirror), self.calls)
         self.assertIn(("mount", "-o", "remount,bind,ro", "--", mirror), self.calls)
         self.assertNotIn(str(self.target / "home"), targets)
@@ -239,12 +239,12 @@ class RecoveryTest(unittest.TestCase):
         outside = self.base / "outside"
         outside.mkdir()
         (self.target / "boot").symlink_to(outside, target_is_directory=True)
-        with self.assertRaisesRegex(recovery.RecoveryError, "symlink"):
+        with self.assertRaisesRegex(chroot.ChrootError, "symlink"):
             self.session.mount_installation()
         self.assertEqual(list(outside.iterdir()), [])
         self.assertFalse(any(c[-1] == str(outside) for c in self.calls))
 
-    def test_missing_mirror_still_allows_repair(self):
+    def test_missing_mirror_still_allows_chroot(self):
         self.session.offline = self.base / "absent"
         self.prepare()
         self.assertIn("No ISO package mirror", self.log.getvalue())
@@ -258,13 +258,13 @@ class RecoveryTest(unittest.TestCase):
 
     def test_list_json_is_read_only(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(recovery.main(["--list", "--json"]), 0)
+            self.assertEqual(chroot.main(["--list", "--json"]), 0)
         self.assertEqual(json.loads(output.getvalue())[0]["name"], "/dev/root-part")
         self.assertEqual(self.calls, [])
 
     def test_noninteractive_selection_fails_without_mounting(self):
-        with mock.patch.object(recovery.sys.stdin, "isatty", return_value=False):
-            self.assertEqual(recovery.main([]), 1)
+        with mock.patch.object(chroot.sys.stdin, "isatty", return_value=False):
+            self.assertEqual(chroot.main([]), 1)
         self.assertIn("--root", self.log.getvalue())
         self.assertEqual(self.calls, [])
 
@@ -275,20 +275,20 @@ class DiscoveryTest(unittest.TestCase):
         unlocked = node("/dev/luks", "crypto_LUKS", children=[node("/dev/mapper/root", type="crypt")])
         nodes = [node("/dev/live", type="disk", children=[mounted]),
                  node("/dev/loop0", type="loop"), node("/dev/readonly", ro=True), unlocked]
-        self.assertEqual([n["name"] for n in recovery.candidates(nodes)], ["/dev/mapper/root"])
+        self.assertEqual([n["name"] for n in chroot.candidates(nodes)], ["/dev/mapper/root"])
 
     def test_fstab_options_keep_filesystem_settings_but_mount_writable(self):
-        self.assertEqual(recovery.mount_options("ro,noauto,nofail,x-systemd.device-timeout=0,subvol=/@pkg,compress=zstd"),
+        self.assertEqual(chroot.mount_options("ro,noauto,nofail,x-systemd.device-timeout=0,subvol=/@pkg,compress=zstd"),
                          "rw,subvol=/@pkg,compress=zstd")
-        with self.assertRaises(recovery.RecoveryError):
-            recovery.mount_options("bind")
+        with self.assertRaises(chroot.ChrootError):
+            chroot.mount_options("bind")
 
     def test_helper_is_executable_and_in_iso_profile(self):
-        helper = ROOT / "configs/airootfs/usr/local/bin/omarchy-recover"
+        helper = ROOT / "configs/airootfs/usr/local/bin/omarchy-chroot"
         result = subprocess.run([str(helper), "--help"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--root", result.stdout)
-        self.assertIn('["/usr/local/bin/omarchy-recover"]="0:0:755"', (ROOT / "configs/profiledef.sh").read_text())
+        self.assertIn('["/usr/local/bin/omarchy-chroot"]="0:0:755"', (ROOT / "configs/profiledef.sh").read_text())
 
 
 if __name__ == "__main__":

@@ -303,7 +303,7 @@ else
   arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
 fi
 live_packages_file="$build_cache_dir/packages.$OMARCHY_ARCH"
-# The recovery helper runs on both architectures, including diagnostic shells
+# The chroot helper runs on both architectures, including diagnostic shells
 # where the installer has not run yet.
 arch_packages+=(arch-install-scripts btrfs-progs python util-linux)
 printf '%s\n' "${arch_packages[@]}" >> "$live_packages_file"
