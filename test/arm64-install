@@ -16,10 +16,12 @@
 #
 # Env: TIMEOUT (seconds for install and first boot, default 1500), SMP (8),
 #      MEM (12G), MACHINE (see test/arm64-live-boot), KERNEL (linux-aarch64),
+#      PLATFORM (the platform the live system's detector is made to name,
+#      for the default set and drivers of a machine a VM cannot be: aarch64-n1x),
 #      MIRROR (where the installed system gets Arch Linux ARM's packages:
 #      Omarchy's own mirror of them).
 set -euo pipefail
-[[ $# -eq 2 ]] || { sed -n '2,20p' "$0" >&2; exit 2; }
+[[ $# -eq 2 ]] || { sed -n '2,22p' "$0" >&2; exit 2; }
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 iso=$(realpath "$1")
 out=$(realpath -m "$2")
@@ -66,6 +68,11 @@ mv "$answers.new" "$answers"
 # gives the test a way in to the live system, to see why an install stopped.
 printf 'instance-id: arm64-install\nlocal-hostname: archiso\n' >"$state/cidata/meta-data"
 printf '#cloud-config\nusers:\n  - name: root\n    ssh_authorized_keys:\n      - %s\n' "$(cat "$SSH_KEY.pub")" >"$state/cidata/user-data"
+# A VM has none of the hardware Omarchy's detector looks for. Given a
+# platform, the live system's copy of it is replaced, before the installer
+# asks, by one that names it.
+[[ -z ${PLATFORM:-} ]] || printf 'write_files:\n  - path: /usr/share/omarchy-iso/omarchy-hw-platform\n    content: |\n      echo %s\n' \
+  "$PLATFORM" >>"$state/cidata/user-data"
 rm -f "$CIDATA_IMG"
 truncate -s 4M "$CIDATA_IMG"
 mkfs.vfat -n CIDATA "$CIDATA_IMG" >/dev/null
@@ -177,6 +184,13 @@ check() { # description, then a command run in the guest that must succeed
     'node=$(ls ~/.local/share/mise/installs/node/*/bin/node | head -n 1); file -bL "$node" | grep -q aarch64'
   check "packages come from Omarchy's mirror and nowhere else" \
     "grep -q '^Server.*omarchy\.org' /etc/pacman.d/mirrorlist && ! grep '^Server' /etc/pacman.d/mirrorlist | grep -vq 'omarchy\.org'"
+  if [[ -n ${PLATFORM:-} ]]; then
+    check "the installer took the $PLATFORM default set" \
+      "echo $GUEST_PASSWORD | sudo -S -p '' grep -aq 'omarchy-base.$PLATFORM.packages' /var/log/omarchy-install.log"
+  fi
+  if [[ ${PLATFORM:-} == aarch64-n1x ]]; then
+    check "the NVIDIA module is built for the running kernel" 'modinfo -k "$(uname -r)" nvidia'
+  fi
 } | tee "$out/checks"
 failures=$(grep -c '^not ok' "$out/checks" || true)
 guest 'uname -r; cat /proc/cmdline; systemctl --failed --no-legend; grep -E "^Server" /etc/pacman.d/mirrorlist' >"$out/facts" 2>&1 || true

@@ -119,6 +119,9 @@ jobs:
           sudo chmod 0666 /dev/kvm
           ./test/arm64-container ./test/arm64-live-boot release/*.iso test-runs/aarch64-live
           ./test/arm64-container ./test/arm64-install release/*.iso test-runs/aarch64-integration
+          # The same ISO once more, as an N1x: the default set and the NVIDIA
+          # module that the installer gives that laptop.
+          PLATFORM=aarch64-n1x ./test/arm64-container ./test/arm64-install release/*.iso test-runs/aarch64-n1x
 
       # The harness ran as root in its container: test-runs and what QEMU
       # wrote there (the serial logs) belong to root until this step.
