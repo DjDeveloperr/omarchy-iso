@@ -180,9 +180,23 @@ check() { # description, then a command run in the guest that must succeed
 } | tee "$out/checks"
 failures=$(grep -c '^not ok' "$out/checks" || true)
 guest 'uname -r; cat /proc/cmdline; systemctl --failed --no-legend; grep -E "^Server" /etc/pacman.d/mirrorlist' >"$out/facts" 2>&1 || true
+# The timings the x86_64 test reports: the installer's own, and this boot's.
+guest "echo $GUEST_PASSWORD | sudo -S -p '' cat /var/log/omarchy-install-timing.json" >"$out/omarchy-install-timing.json" 2>/dev/null || true
+guest 'systemd-analyze' >"$out/first-boot-systemd-analyze.txt" 2>/dev/null || true
 ssh -i "$SSH_KEY" -p "$port" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$GUEST_USER@127.0.0.1" "sudo -S -p '' cat /var/log/omarchy-install.log" \
   <<<"$GUEST_PASSWORD" >"$out/omarchy-install.log" 2>/dev/null || true
 screen "$out/shots/installed.png" >/dev/null
+# The boot of every day after the first, as the x86_64 test measures it.
+mkdir -p "$out/runs/everyday-boot"
+booted=$(guest 'cat /proc/sys/kernel/random/boot_id')
+guest "echo $GUEST_PASSWORD | sudo -S -p '' systemctl reboot" >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do
+  sleep 5
+  now=$(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) && [[ $now != "$booted" ]] && break
+done
+guest 'timeout 180 systemctl is-system-running --wait; systemd-analyze' 2>/dev/null |
+  grep -a '^Startup finished' >"$out/runs/everyday-boot/systemd-analyze.txt" ||
+  { echo "arm64-install: the installed system did not come back from a reboot" >&2; failures=$((failures + 1)); }
 (( failures == 0 )) || { echo "arm64-install: $failures checks failed" >&2; exit 1; }
 echo "arm64-install: installed, rebooted and checked in $(cut -d= -f2 "$out/timing") s"

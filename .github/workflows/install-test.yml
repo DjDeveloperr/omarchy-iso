@@ -1,8 +1,8 @@
 name: Install test
 
-# Builds the ISO a pull request produces, installs it unattended in a KVM
-# guest, boots the installed system again, and reports how long the install
-# and both boots took. Every later change to the installer is measured
+# Builds the ISO a pull request produces, once per architecture, installs it
+# unattended in a KVM guest, boots the installed system again, and reports how
+# long the build, the install and both boots took. Every later change to the installer is measured
 # against these numbers in its own PR.
 
 on:
@@ -21,14 +21,23 @@ concurrency:
 
 jobs:
   install:
-    # Our own branches run on Namespace. A pull request from a fork stays on
-    # GitHub's runner: it is somebody else's code, and it has no business on
-    # our account's machines. No cache volume either way: what one pull
-    # request leaves in a cache the next run would trust.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
+    name: "${{ matrix.arch }}: build the ISO, install it unattended, boot the result"
+    strategy:
+      fail-fast: false
+      matrix:
+        # Our own branches run on Namespace. A pull request from a fork stays
+        # on GitHub's runner, x86_64 only: it is somebody else's code, and it
+        # has no business on our account's machines. No cache of build output
+        # either way: what one pull request leaves the next run would trust.
+        arch: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["x86_64"]' || '["x86_64", "aarch64"]') }}
+    # aarch64 runs on Linux on Apple Silicon: the ARM runners that have KVM.
+    runs-on: ${{ matrix.arch == 'aarch64' && 'namespace-profile-arm64-linux-apple-12x32' || github.event.pull_request.head.repo.fork && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
 
       # Fail early and loudly if the runner ever has less disk than this needs.
       - name: Check disk space
@@ -38,14 +47,40 @@ jobs:
           [ "$avail_gb" -ge 40 ] || { echo "::error::only ${avail_gb} GB free, the ISO build and install test need ~40 GB"; exit 1; }
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: matrix.arch == 'x86_64'
+
+      # aarch64 builds on linux-omarchy-n1x, the one kernel for every aarch64
+      # board. No channel serves it yet, and the published Omarchy packages
+      # carry no aarch64 support: both come from the n1x branches, the kernel
+      # as omarchy-pkgs' CI built it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.arch == 'aarch64'
+        with: { repository: omacom/omarchy, ref: n1x, path: src/omarchy, fetch-depth: 0, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.arch == 'aarch64'
+        with: { repository: omacom/omarchy-pkgs, ref: n1x, path: src/omarchy-pkgs, persist-credentials: false }
+      - name: Packages of the n1x branch that are not published yet
+        if: matrix.arch == 'aarch64'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./test/arm64-n1x-bundle src/omarchy-pkgs "$RUNNER_TEMP/bundle"
 
       - name: Build the ISO
-        run: NO_BOOT_OFFER=1 ./bin/omarchy-iso-make
+        run: |
+          start=$(date +%s)
+          if [[ ${{ matrix.arch }} == aarch64 ]]; then
+            ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer --kernel linux-omarchy-n1x \
+              --package-dir "$RUNNER_TEMP/bundle" --local-source src/omarchy src/omarchy-pkgs
+          else
+            NO_BOOT_OFFER=1 ./bin/omarchy-iso-make
+          fi
+          mkdir -p test-runs && echo $(( $(date +%s) - start )) >test-runs/build-seconds
 
       # The harness runs in an Arch container: Arch's current QEMU and OVMF
       # (QEMU 11) instead of the runner's older one, at the paths the
       # harness expects, the same as on an Omarchy workstation.
       - name: Install unattended, then boot the installed system
+        if: matrix.arch == 'x86_64'
         run: |
           sudo chmod 0666 /dev/kvm
           docker run --rm --device /dev/kvm -v "$PWD:/w" -w /w \
@@ -74,6 +109,17 @@ jobs:
               ./test/integration release/*.iso boot --no-preview --memory 8192 --timeout 1800
             '
 
+      # The same on aarch64, by its own tests, in the image the ISO is built
+      # in: first the live ISO to its installer, then the install.
+      - name: Install unattended, then boot the installed system (aarch64)
+        if: matrix.arch == 'aarch64'
+        env:
+          KERNEL: linux-omarchy-n1x
+        run: |
+          sudo chmod 0666 /dev/kvm
+          ./test/arm64-container ./test/arm64-live-boot release/*.iso test-runs/aarch64-live
+          ./test/arm64-container ./test/arm64-install release/*.iso test-runs/aarch64-integration
+
       # The harness ran as root in its container: test-runs and what QEMU
       # wrote there (the serial logs) belong to root until this step.
       - name: Hand the results to the runner's user
@@ -81,6 +127,7 @@ jobs:
         run: |
           mkdir -p test-runs
           sudo chown -R "$(id -u):$(id -g)" test-runs
+          echo "${{ job.status }}" >test-runs/status
 
       - name: Report times
         if: always()
@@ -120,9 +167,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: install-test-${{ github.run_id }}-${{ github.run_attempt }}
+          name: install-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
           path: |
             test-runs/pr-number
+            test-runs/status
+            test-runs/build-seconds
+            test-runs/*/checks
+            test-runs/*/*.png
+            test-runs/*/serial.log
+            test-runs/*/shots/*.png
             test-runs/*/omarchy-install-timing.json
             test-runs/*/omarchy-install.log
             test-runs/*/first-boot-systemd-analyze.txt

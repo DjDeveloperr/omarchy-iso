@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   unit:
+    name: "Unit tests (shell and Python, no VM)"
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
