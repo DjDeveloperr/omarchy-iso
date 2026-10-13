@@ -13,10 +13,8 @@ initrd=/boot/initramfs-$1.img
 uki=/boot/omarchy-live.efi
 hwids=/usr/lib/systemd/boot/hwids/aa64
 
-# Arch Linux ARM's kernel keeps every board's device trees in /boot/dtbs.
-# Omarchy's own kernel keeps its Snapdragon ones under its package name.
-dtb_dir=/boot/dtbs/qcom
-[[ ! -d /boot/dtbs/$1/qcom ]] || dtb_dir=/boot/dtbs/$1/qcom
+# The kernel package keeps its Snapdragon device trees under its own name.
+dtb_dir=/boot/dtbs/$1/qcom
 
 # Include supported Snapdragon generations while staying below the UKI section limit.
 # EL2 variants share hardware IDs with their base DTBs and would be ambiguous.
