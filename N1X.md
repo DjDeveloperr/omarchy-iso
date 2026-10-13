@@ -6,14 +6,14 @@ There are two images:
 
 | Image | File name | Use it for |
 | --- | --- | --- |
-| Normal | `omarchy-<date>-aarch64-n1x-local.iso` | Everyday installs. No remote access, like any Omarchy ISO; the installed system leaves sshd off. |
-| Dev | `omarchy-<date>-aarch64-n1x-devssh-local.iso` | Debugging. Adds key-only SSH for the public key it was built with, on the live USB and the installed system, and verbose installer output. |
+| Normal | `omarchy-<date>-aarch64-local.iso` | Everyday installs. No remote access, like any Omarchy ISO; the installed system leaves sshd off. |
+| Dev | `omarchy-<date>-aarch64-devssh-local.iso` | Debugging. Adds key-only SSH for the public key it was built with, on the live USB and the installed system, and verbose installer output. |
 
 Both install the same Omarchy. Only the dev image opens remote access, so do not hand a dev image, or a machine installed from one, to anyone else.
 
 ## What is different from stock Omarchy
 
-- **Kernel:** `linux-omarchy-n1x`, the `linux-omarchy` kernel with NVIDIA's N1x platform support and Omarchy's N1x patches (see `pkgbuilds/linux-omarchy-n1x` in omarchy-pkgs).
+- **Kernel:** `linux-omarchy`, the `linux-omarchy` kernel with NVIDIA's N1x platform support and Omarchy's N1x patches (see `pkgbuilds/linux-omarchy` in omarchy-pkgs).
 - **GPU:** the NVIDIA open driver from Omarchy's aarch64 repository, loaded early so the disk passphrase prompt and the desktop are drawn by the GPU. On the Dell's pre-release firmware (0.x) the driver stays unloaded and the desktop renders in software.
 - **Console:** every boot entry carries `console=tty0 acpi=nospcr`. Without it the firmware's serial console takes over and the screen stays black, the disk passphrase prompt included.
 - **Boot splash:** Plymouth, as on every Omarchy machine, with the panel lit for the passphrase prompt.
@@ -31,7 +31,7 @@ Both install the same Omarchy. Only the dev image opens remote access, so do not
 1. Write the image to a USB stick of 8 GB or more, replacing `/dev/sdX` with the stick (check with `lsblk`; everything on it is erased):
 
    ```bash
-   sudo dd if=omarchy-<date>-aarch64-n1x-local.iso of=/dev/sdX bs=4M status=progress oflag=sync
+   sudo dd if=omarchy-<date>-aarch64-local.iso of=/dev/sdX bs=4M status=progress oflag=sync
    ```
 
 2. Plug the stick into the laptop, power it on, open the firmware's boot menu and pick the stick. It boots straight into the installer; the internal keyboard works there.
@@ -49,8 +49,8 @@ The **USB stick** boots the installer without showing a menu. Press Esc while it
 
 The **installed system** (Limine) offers:
 
-- **linux-omarchy-n1x**, the normal desktop. It boots by default.
-- **linux-omarchy-n1x-fallback**, the rescue entry. It boots the same system to a text login with the NVIDIA driver blocked and Plymouth off; use it if the desktop comes up black. It is rebuilt with every kernel update.
+- **linux-omarchy**, the normal desktop. It boots by default.
+- **linux-omarchy-fallback**, the rescue entry. It boots the same system to a text login with the NVIDIA driver blocked and Plymouth off; use it if the desktop comes up black. It is rebuilt with every kernel update.
 - **Snapshots**, once Omarchy has taken some.
 
 `sudo omarchy-n1x-probe` records hardware and boot details to `/var/log/omarchy-n1x-probe.log` on demand.
@@ -87,16 +87,16 @@ sudo ufw delete allow ssh
 
 Builds run natively on an aarch64 host with Docker, from sibling checkouts of omarchy, omarchy-pkgs and this repository. They need a platform package directory with the packages no repository publishes yet, built from omarchy-pkgs, and a `SHA256SUMS` covering them:
 
-- `linux-omarchy-n1x` and `linux-omarchy-n1x-headers`
+- `linux-omarchy` and `linux-omarchy-headers`
 - `asus-proart-p14-speaker-firmware`
 
 ```bash
 # Normal image
-bin/omarchy-iso-make --arch aarch64 --kernel linux-omarchy-n1x \
+bin/omarchy-iso-make --arch aarch64 \
   --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
 
 # Dev image: adds key-only SSH for your public key and verbose installer output
-bin/omarchy-iso-make --arch aarch64 --kernel linux-omarchy-n1x --dev-ssh ~/.ssh/id_ed25519.pub --debug \
+bin/omarchy-iso-make --arch aarch64 --dev-ssh ~/.ssh/id_ed25519.pub --debug \
   --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
 ```
 

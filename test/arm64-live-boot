@@ -68,7 +68,7 @@ qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,its=off,acpi=off}" -
 
 # The live system is up when it offers a login on the serial port, or shows the
 # installer on the screen: an image whose kernel command line names no serial
-# console (linux-omarchy-n1x, for the laptops' panel) says nothing on the port.
+# console (linux-omarchy, for the laptops' panel) says nothing on the port.
 installer_on_screen() {
   screenshot 2>/dev/null
   tesseract "$out/screen.png" - 2>/dev/null | grep -q 'Start Install'

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assembles the package directory an aarch64 build on linux-omarchy-n1x needs
+# Assembles the package directory an aarch64 build on linux-omarchy needs
 # (--package-dir) from what omarchy-pkgs' CI built: the packages of its n1x
 # branch that no channel serves yet. Each build is kept there as an artifact
 # named after the package directory's tree, so this takes exactly the builds of
@@ -15,7 +15,7 @@ repo=${OMARCHY_PKGS_REPO:-omacom/omarchy-pkgs}
 api() { curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
 
 mkdir -p "$out"
-for package in linux-omarchy-n1x asus-proart-p14-speaker-firmware nvidia-utils nvidia-open-dkms hyprland aquamarine; do
+for package in linux-omarchy-aarch64 asus-proart-p14-speaker-firmware nvidia-utils nvidia-open-dkms hyprland aquamarine; do
   tree=$(git -C "$pkgs" rev-parse "HEAD:pkgbuilds/$package")
   name="$package-aarch64-$tree"
   id=$(api "https://api.github.com/repos/$repo/actions/artifacts?name=$name&per_page=100" |

@@ -26,9 +26,9 @@ while [[ $# -gt 0 ]]; do
   --kernel)
     # The kernel an aarch64 image boots and installs. One image serves every
     # board and the installer asks the machine which one it is on, so the kernel
-    # is the only choice left to the build. The default is Arch Linux ARM's
-    # linux-aarch64. linux-omarchy-n1x is the kernel the NVIDIA N1x laptops
-    # need; no repository publishes it yet, so it comes with --package-dir.
+    # is the only choice left to the build. The default is linux-omarchy; no
+    # repository publishes it yet, so it comes with --package-dir. Arch Linux
+    # ARM's linux-aarch64 can be named here in its place.
     ARM_KERNEL="${2:-}"
     if [[ -z $ARM_KERNEL ]]; then
       echo "Error: --kernel requires a kernel package name" >&2
@@ -107,7 +107,7 @@ while [[ $# -gt 0 ]]; do
   *)
     echo "Unknown option: $1"
     echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
-    echo "       $0 --arch aarch64 --edge [--kernel <package> --package-dir DIR] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
+    echo "       $0 --arch aarch64 --edge --package-dir DIR [--kernel <package>] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
     exit 1
     ;;
   esac
@@ -122,7 +122,7 @@ fi
 
 # Architecture selection. x86_64 is unchanged. aarch64 builds run in a pinned
 # Arch Linux ARM container against Omarchy's edge aarch64 repository, and make
-# one image for every board. linux-omarchy-n1x also needs the package bundle
+# one image for every board, on linux-omarchy. That needs the package bundle
 # that carries it, since no repository publishes that kernel yet. build-iso.sh
 # refuses a runtime without the platform support, which today means
 # --local-source against a checkout that has it.
@@ -130,13 +130,13 @@ CONTAINER_IMAGE=ghcr.io/archlinux/archlinux:latest
 CONTAINER_PLATFORM_ARGS=()
 OMARCHY_KERNEL=linux-t2
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
-  OMARCHY_KERNEL=${ARM_KERNEL:-linux-aarch64}
-  if [[ $OMARCHY_KERNEL == linux-omarchy-n1x && -z $PACKAGE_DIR ]]; then
-    echo "Error: --kernel linux-omarchy-n1x requires --package-dir DIR; no repository publishes that kernel yet" >&2
-    exit 1
-  fi
+  OMARCHY_KERNEL=${ARM_KERNEL:-linux-omarchy}
   if [[ ${OMARCHY_MIRROR:-} != edge ]]; then
     echo "Error: --arch aarch64 builds use the edge channel, the only one Omarchy publishes for aarch64; pass --edge and drop --rc" >&2
+    exit 1
+  fi
+  if [[ $OMARCHY_KERNEL == linux-omarchy && -z $PACKAGE_DIR ]]; then
+    echo "Error: an aarch64 build on linux-omarchy requires --package-dir DIR; no repository publishes that kernel yet" >&2
     exit 1
   fi
   if [[ -n $PACKAGE_DIR ]]; then

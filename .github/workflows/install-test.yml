@@ -49,7 +49,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: matrix.arch == 'x86_64'
 
-      # aarch64 builds on linux-omarchy-n1x, the one kernel for every aarch64
+      # aarch64 builds on linux-omarchy, the one kernel for every aarch64
       # board. No channel serves it yet, and the published Omarchy packages
       # carry no aarch64 support: both come from the n1x branches, the kernel
       # as omarchy-pkgs' CI built it.
@@ -69,7 +69,7 @@ jobs:
         run: |
           start=$(date +%s)
           if [[ ${{ matrix.arch }} == aarch64 ]]; then
-            ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer --kernel linux-omarchy-n1x \
+            ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer \
               --package-dir "$RUNNER_TEMP/bundle" --local-source src/omarchy src/omarchy-pkgs
           else
             NO_BOOT_OFFER=1 ./bin/omarchy-iso-make
@@ -113,8 +113,6 @@ jobs:
       # in: first the live ISO to its installer, then the install.
       - name: Install unattended, then boot the installed system (aarch64)
         if: matrix.arch == 'aarch64'
-        env:
-          KERNEL: linux-omarchy-n1x
         run: |
           sudo chmod 0666 /dev/kvm
           ./test/arm64-container ./test/arm64-live-boot release/*.iso test-runs/aarch64-live

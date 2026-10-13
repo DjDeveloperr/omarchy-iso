@@ -448,7 +448,7 @@ if [[ $iso_arch == aarch64 && ! -s /root/omarchy_kernel ]]; then
 fi
 
 # T2 Macs need their own kernel for keyboard/wifi drivers. aarch64 images are
-# built for one platform kernel (linux-omarchy-n1x today), recorded by the
+# built for one platform kernel (linux-omarchy today), recorded by the
 # build, and nothing else boots.
 iso_kernel=$(cat /root/omarchy_kernel 2>/dev/null || true)
 detect_kernel() {

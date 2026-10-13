@@ -22,7 +22,7 @@ ROOT_CMDLINE = (
     "cryptdevice=PARTUUID=f073914b-b386-4b56-b181-61ea375509ee:root root=/dev/mapper/root "
     "zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs"
 )
-KERNEL = "linux-omarchy-n1x"
+KERNEL = "linux-omarchy"
 RESCUE_CMDLINE = (
     f"{ROOT_CMDLINE} console=tty0 acpi=nospcr plymouth.enable=0 nomodeset "
     "systemd.unit=multi-user.target fbcon=map:0 loglevel=7"
@@ -33,15 +33,15 @@ NORMAL_CMDLINE = (
 )
 
 
-# Shaped like the limine.conf limine-entry-tool writes for linux-omarchy-n1x with
+# Shaped like the limine.conf limine-entry-tool writes for linux-omarchy with
 # its fallback UKI as the rescue entry.
 def limine_conf(rescue_cmdline=RESCUE_CMDLINE, normal_cmdline=NORMAL_CMDLINE, rescue=True):
     rescue_entry = f"""\
-  //linux-omarchy-n1x-fallback
-  comment: Kernel version: 7.2.5-9-omarchy-n1x
-  comment: kernel-id=linux-omarchy-n1x-fallback
+  //linux-omarchy-fallback
+  comment: Kernel version: 7.2.8-8-omarchy
+  comment: kernel-id=linux-omarchy-fallback
   protocol: efi
-  path: boot():/EFI/Linux/omarchy_linux-omarchy-n1x-fallback.efi#5187fcdd
+  path: boot():/EFI/Linux/omarchy_linux-omarchy-fallback.efi#5187fcdd
   cmdline: {rescue_cmdline}
 """ if rescue else ""
     return f"""\
@@ -50,11 +50,11 @@ default_entry: 2
 
 /+Omarchy
 comment: Omarchy
-  //linux-omarchy-n1x
-  comment: Kernel version: 7.2.5-9-omarchy-n1x
-  comment: kernel-id=linux-omarchy-n1x
+  //linux-omarchy
+  comment: Kernel version: 7.2.8-8-omarchy
+  comment: kernel-id=linux-omarchy
   protocol: efi
-  path: boot():/EFI/Linux/omarchy_linux-omarchy-n1x.efi#1ebecba8
+  path: boot():/EFI/Linux/omarchy_linux-omarchy.efi#1ebecba8
   cmdline: {normal_cmdline}
 {rescue_entry}
 /EFI fallback
@@ -157,7 +157,7 @@ class N1xLimineContractTest(unittest.TestCase):
         self.validate(limine_conf(normal_cmdline=ROOT_CMDLINE), "")
 
     def test_entry_without_panel_console_fails(self):
-        with self.assertRaisesRegex(RuntimeError, "linux-omarchy-n1x lacks console=tty0"):
+        with self.assertRaisesRegex(RuntimeError, "linux-omarchy lacks console=tty0"):
             self.validate(limine_conf(normal_cmdline=f"quiet splash acpi=nospcr {ROOT_CMDLINE}"), "n1x")
 
     def test_entry_without_nospcr_fails(self):
@@ -169,7 +169,7 @@ class N1xLimineContractTest(unittest.TestCase):
             self.validate(limine_conf(normal_cmdline=f"console=tty0,115200 acpi=nospcr {ROOT_CMDLINE}"), "n1x")
 
     def test_missing_rescue_entry_fails(self):
-        with self.assertRaisesRegex(RuntimeError, "no linux-omarchy-n1x-fallback rescue entry"):
+        with self.assertRaisesRegex(RuntimeError, "no linux-omarchy-fallback rescue entry"):
             self.validate(limine_conf(rescue=False), "n1x")
 
     # The 2026-09-03 failure: the rescue entry carried the normal cmdline, so

@@ -15,7 +15,7 @@
 # the serial log, screenshots, the installer's log and the checks' output.
 #
 # Env: TIMEOUT (seconds for install and first boot, default 1500), SMP (8),
-#      MEM (12G), MACHINE (see test/arm64-live-boot), KERNEL (linux-aarch64),
+#      MEM (12G), MACHINE (see test/arm64-live-boot), KERNEL (linux-omarchy),
 #      PLATFORM (the platform the live system's detector is made to name,
 #      for the default set and drivers of a machine a VM cannot be: aarch64-n1x),
 #      MIRROR (where the installed system gets Arch Linux ARM's packages:
@@ -58,7 +58,7 @@ ssh-keygen -q -t ed25519 -N '' -C arm64-install -f "$SSH_KEY"
 eval "$(sed -n '/^build_cidata() {$/,/^  mcopy -i "\$CIDATA_IMG"/p' "$ROOT/test/integration.d/base-test.sh"; echo '}')"
 build_cidata
 answers=$state/cidata/user_configuration.json
-jq --arg kernel "${KERNEL:-linux-aarch64}" --arg mirror "${MIRROR:-https://arm-mirror.omarchy.org/\$arch/\$repo}" '
+jq --arg kernel "${KERNEL:-linux-omarchy}" --arg mirror "${MIRROR:-https://arm-mirror.omarchy.org/\$arch/\$repo}" '
   .omarchy_install.boot.efi_binary = "limine_aa64.efi"
   | .omarchy_install.storage.kernel = $kernel
   | .kernels = [$kernel]
@@ -175,7 +175,7 @@ check() { # description, then a command run in the guest that must succeed
   check "no unit failed" '[ -z "$(systemctl --failed --no-legend)" ]'
   check "the desktop is up: Hyprland is running" 'for i in $(seq 1 60); do pgrep -x Hyprland && exit 0; sleep 1; done; exit 1'
   check "it runs the kernel it was told to install" \
-    "pacman -Qo /usr/lib/modules/\$(uname -r) | grep -q ' ${KERNEL:-linux-aarch64} '"
+    "pacman -Qo /usr/lib/modules/\$(uname -r) | grep -q ' ${KERNEL:-linux-omarchy} '"
   check "the user can use sudo" "echo $GUEST_PASSWORD | sudo -S -p '' true"
   check "it booted through Limine's unified kernel image" \
     "echo $GUEST_PASSWORD | sudo -S -p '' sh -c 'ls /boot/EFI/Linux/omarchy_*.efi'"
