@@ -46,13 +46,17 @@ jobs:
         env:
           # A push to quattro or a manual run is ours already.
           STATUS: ${{ github.event_name != 'pull_request' && 'ours' || steps.vouch.outputs.status }}
+          AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
         run: |
           case "$STATUS" in
-            ours | bot | collaborator | vouched) trusted=true ;;
+            ours | collaborator | vouched) trusted=true ;;
+            # Any GitHub App's account counts as a bot, so only the ones that
+            # work in this repository are trusted.
+            bot) case "$AUTHOR" in 'dependabot[bot]' | 'github-actions[bot]') trusted=true ;; *) trusted=false ;; esac ;;
             *) trusted=false ;;
           esac
           echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
-          echo "${{ github.event.pull_request.user.login || github.actor }}: $STATUS, trusted=$trusted" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "$AUTHOR: $STATUS, trusted=$trusted" | tee -a "$GITHUB_STEP_SUMMARY"
 
   install:
     needs: trust

@@ -3,6 +3,7 @@
 # The install test runs on Omarchy's Namespace runners only for an author we
 # trust: repository collaborators with write access are trusted automatically
 # and do not need listing; external contributors listed here are trusted too.
+# Of the bots, only Dependabot and GitHub Actions are (the workflow names them).
 # Anyone else gets GitHub's runner. The list is read from the default branch,
 # so a pull request cannot vouch for itself.
 #
