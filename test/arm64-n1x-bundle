@@ -1,0 +1,30 @@
+#!/bin/bash
+# Assembles the package directory an aarch64 build on linux-omarchy-n1x needs
+# (--package-dir) from what omarchy-pkgs' CI built: the packages of its n1x
+# branch that no channel serves yet. Each build is kept there as an artifact
+# named after the package directory's tree, so this takes exactly the builds of
+# the checkout it is given.
+#
+#   test/arm64-n1x-bundle <omarchy-pkgs checkout> <out_dir>
+#
+# Env: GH_TOKEN (a token that may read omarchy-pkgs' artifacts).
+set -euo pipefail
+
+pkgs=$1 out=$2
+repo=${OMARCHY_PKGS_REPO:-omacom/omarchy-pkgs}
+api() { curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+
+mkdir -p "$out"
+for package in linux-omarchy-n1x asus-proart-p14-speaker-firmware nvidia-utils nvidia-open-dkms hyprland aquamarine; do
+  tree=$(git -C "$pkgs" rev-parse "HEAD:pkgbuilds/$package")
+  name="$package-aarch64-$tree"
+  id=$(api "https://api.github.com/repos/$repo/actions/artifacts?name=$name&per_page=100" |
+    jq -r '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .id // empty')
+  [[ -n $id ]] || { echo "arm64-n1x-bundle: $repo has no build of $package at tree $tree" >&2; exit 1; }
+  api -o "$out/$name.zip" "https://api.github.com/repos/$repo/actions/artifacts/$id/zip"
+  unzip -oq "$out/$name.zip" -d "$out/$name"
+  tar -xf "$out/$name/packages.tar" -C "$out"
+  rm -rf "${out:?}/$name" "${out:?}/$name.zip"
+  echo "arm64-n1x-bundle: $package from artifact $id"
+done
+(cd "$out" && sha256sum ./*.pkg.tar.* >SHA256SUMS)
