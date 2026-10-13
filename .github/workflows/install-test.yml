@@ -20,12 +20,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Our Namespace runners are for people we trust, by the rule omarchy-pkgs
+  # builds by: a collaborator with write access, or someone in
+  # .github/VOUCHED.td (read from the default branch, so a pull request cannot
+  # vouch for itself). Whether the pull request comes from a fork does not
+  # matter. Anyone else gets GitHub's runner.
+  #
+  # This chooses the runner for an honest pull request. It does not stop a
+  # dishonest one: GitHub runs a pull request's own copy of this file, which
+  # can ask for any runner. What stops that is the repository holding outside
+  # contributors' workflow runs until a maintainer approves them (Settings,
+  # Actions, "Approval for running fork pull request workflows").
+  trust:
+    name: "Is the author trusted to use our runners"
+    runs-on: ubuntu-26.04
+    outputs:
+      trusted: ${{ steps.gate.outputs.trusted }}
+    steps:
+      # A lookup that fails must not stop the test: the author is then
+      # untrusted and the test runs on GitHub's runner.
+      - id: vouch
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: mitchellh/vouch/action/check-user@f23dbb5e745334f97414ec70463ce7301071a661 # v1
+        with:
+          user: ${{ github.event.pull_request.user.login }}
+          allow-fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: gate
+        env:
+          # A push to quattro or a manual run is ours already.
+          STATUS: ${{ github.event_name != 'pull_request' && 'ours' || steps.vouch.outputs.status }}
+          AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+        run: |
+          case "$STATUS" in
+            ours | collaborator | vouched) trusted=true ;;
+            # Any GitHub App's account counts as a bot, so only the ones that
+            # work in this repository are trusted.
+            bot) case "$AUTHOR" in 'dependabot[bot]' | 'github-actions[bot]') trusted=true ;; *) trusted=false ;; esac ;;
+            *) trusted=false ;;
+          esac
+          echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+          echo "$AUTHOR: $STATUS, trusted=$trusted" | tee -a "$GITHUB_STEP_SUMMARY"
+
   install:
-    # Our own branches run on Namespace. A pull request from a fork stays on
-    # GitHub's runner: it is somebody else's code, and it has no business on
-    # our account's machines. No cache volume either way: what one pull
-    # request leaves in a cache the next run would trust.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
+    needs: trust
+    # No cache volume on either runner: what one pull request leaves in a
+    # cache the next run would trust.
+    runs-on: ${{ needs.trust.outputs.trusted == 'true' && 'namespace-profile-linux-amd64-16x32' || 'ubuntu-26.04' }}
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
