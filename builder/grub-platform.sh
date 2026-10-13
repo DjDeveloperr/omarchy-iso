@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# The N1x recovery entry boots the hardware probe that only linux-omarchy-n1x
+# The N1x recovery entry boots the hardware probe that only linux-omarchy
 # can run, so it stays in the menu of an image on that kernel and leaves every
 # other one.
 configure_grub_kernel() {
@@ -8,7 +8,7 @@ configure_grub_kernel() {
   local kernel=${2:-}
 
   case "$kernel" in
-    linux-omarchy-n1x)
+    linux-omarchy)
       sed -i \
         -e '/^%N1X_ONLY_BEGIN%$/d' \
         -e '/^%N1X_ONLY_END%$/d' \

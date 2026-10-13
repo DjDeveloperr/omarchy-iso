@@ -21,7 +21,7 @@ bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/n1x-dev-ssh/omarchy-n1x-dev-ssh" "$ROOT/configs/airootfs/root/.automated_script.sh"
 
 grep -Fq 'menci/archlinuxarm@sha256:' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest"
-grep -Fq -- '--kernel linux-omarchy-n1x requires --package-dir DIR' "$ROOT/bin/omarchy-iso-make" || fail "the N1x kernel must come with its package bundle"
+grep -Fq -- 'an aarch64 build on linux-omarchy requires --package-dir DIR' "$ROOT/bin/omarchy-iso-make" || fail "the N1x kernel must come with its package bundle"
 grep -Fq 'ships no $required' "$ROOT/builder/build-iso.sh" || fail "a runtime without the platform support is not refused"
 for required in bin/omarchy-hw-platform install/hardware/qualcomm/dtb-uki.sh install/omarchy-aarch64-qualcomm.packages \
   install/omarchy-aarch64-n1x.packages install/omarchy-aarch64-gb10.packages; do
@@ -32,9 +32,9 @@ grep -Fq 'sha256sum --check --strict --quiet SHA256SUMS' "$ROOT/bin/omarchy-iso-
 grep -Fq -- '-v "$PACKAGE_DIR:/packages:ro"' "$ROOT/bin/omarchy-iso-make" || fail "bundle is not mounted read-only at /packages"
 grep -Fq 'OMARCHY_ARCH == x86_64 && -d /var/cache/pacman/pkg' "$ROOT/bin/omarchy-iso-make" || fail "host pacman cache would leak into aarch64 builds"
 grep -Fq 'builds use the edge channel' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 builds must be pinned to the edge channel"
-grep -Fq 'OMARCHY_KERNEL=${ARM_KERNEL:-linux-aarch64}' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 image does not boot linux-aarch64 unless told otherwise"
+grep -Fq 'OMARCHY_KERNEL=${ARM_KERNEL:-linux-omarchy}' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 image does not boot linux-omarchy unless told otherwise"
 grep -Fq 'OMARCHY_ARM_PLATFORM' "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" && fail "an aarch64 build still asks which board it is for"
-grep -Fq "ALL_kver='/boot/vmlinuz-linux-omarchy-n1x'" "$ROOT/builder/linux-omarchy-n1x.preset" || fail "the live preset does not boot linux-omarchy-n1x"
+grep -Fq "ALL_kver='/boot/vmlinuz-linux-omarchy'" "$ROOT/builder/linux-omarchy.preset" || fail "the live preset does not boot linux-omarchy"
 grep -Fq 'echo "$OMARCHY_KERNEL" > "$build_cache_dir/airootfs/root/omarchy_kernel"' "$ROOT/builder/build-iso.sh" || fail "the installer is not told which kernel to install"
 
 # --- builder wiring -----------------------------------------------------------
@@ -63,15 +63,15 @@ for cfg in grub.cfg loopback.cfg; do
   grep -Fq -- "--id 'n1x-recovery'" "$src" || fail "$cfg lacks the N1x recovery entry"
   grep -Fq 'omarchy.n1x_recovery=1 acpi=nospcr' "$src" || fail "$cfg recovery entry lacks acpi=nospcr"
   source "$ROOT/builder/grub-platform.sh"
-  for platform in linux-t2 linux-omarchy-n1x linux-aarch64; do
+  for platform in linux-t2 linux-omarchy linux-aarch64; do
     cp "$src" "$fixture/$platform-$cfg"
     configure_grub_kernel "$fixture/$platform-$cfg" "$platform"
-    sed -i -e 's|%KERNEL%|linux-omarchy-n1x|g' -e 's|%BOOT_SPLASH_KERNEL_OPTIONS%|quiet splash |g' -e 's|%KERNEL_OPTIONS%|console=tty0|g' \
+    sed -i -e 's|%KERNEL%|linux-omarchy|g' -e 's|%BOOT_SPLASH_KERNEL_OPTIONS%|quiet splash |g' -e 's|%KERNEL_OPTIONS%|console=tty0|g' \
       -e 's|%INSTALL_DIR%|arch|g' -e 's|%ARCH%|aarch64|g' -e 's|%ARCHISO_UUID%|x|g' "$fixture/$platform-$cfg"
     if command -v grub-script-check >/dev/null; then
       grub-script-check "$fixture/$platform-$cfg" || fail "$cfg ($platform) is not valid GRUB script"
     fi
-    if [[ $platform == linux-omarchy-n1x ]]; then
+    if [[ $platform == linux-omarchy ]]; then
       grep -Fq 'n1x-recovery' "$fixture/$platform-$cfg" || fail "the N1x kernel's menu lost the recovery entry in $cfg"
     else
       grep -Fq 'n1x-recovery' "$fixture/$platform-$cfg" && fail "recovery entry leaked into the $platform $cfg"
@@ -98,14 +98,14 @@ grep -Fq 'smbios --type 4 --get-string 7 --set cpu_maker' "$grub" || fail "GRUB 
 
 # --- manifest filter -----------------------------------------------------------
 source "$ROOT/builder/aarch64-package-filter.sh"
-result=$(filter_aarch64_packages linux-omarchy-n1x linux linux-headers linux-omarchy linux-omarchy-headers amd-ucode broadcom-wl-dkms tzupdate lib32-nvidia-utils dell-xps13-sidecar-amps linux-firmware-cirrus-dx13260 apple-bcm-firmware-fetcher superwhisper-bin mise-bin nvim vi obs-studio yay-debug hyprland omarchy-dev 2>/dev/null | tr '\n' ' ')
-[[ $result == "linux-omarchy-n1x linux-omarchy-n1x-headers linux-omarchy-n1x linux-omarchy-n1x-headers tzupdate mise-bin neovim ex-vi-compat hyprland omarchy-dev " ]] || fail "manifest filter produced: $result"
-# The N1x list names the kernel no repository publishes. It keeps the name on an
-# image that boots it, and the image's own kernel stands in everywhere else.
-result=$(filter_aarch64_packages linux-omarchy-n1x linux-omarchy-n1x linux-omarchy-n1x-headers 2>/dev/null | paste -sd' ')
-[[ $result == "linux-omarchy-n1x linux-omarchy-n1x-headers" ]] || fail "the N1x kernel lost its name on its own image: $result"
-result=$(filter_aarch64_packages linux-aarch64 linux-omarchy-n1x linux-omarchy-n1x-headers 2>/dev/null | paste -sd' ')
-[[ $result == "linux-aarch64 linux-aarch64-headers" ]] || fail "an image on another kernel asks for the unpublished N1x kernel: $result"
+result=$(filter_aarch64_packages linux-omarchy linux linux-headers linux-omarchy linux-omarchy-headers amd-ucode broadcom-wl-dkms tzupdate lib32-nvidia-utils dell-xps13-sidecar-amps linux-firmware-cirrus-dx13260 apple-bcm-firmware-fetcher superwhisper-bin mise-bin nvim vi obs-studio yay-debug hyprland omarchy-dev 2>/dev/null | tr '\n' ' ')
+[[ $result == "linux-omarchy linux-omarchy-headers linux-omarchy linux-omarchy-headers tzupdate mise-bin neovim ex-vi-compat hyprland omarchy-dev " ]] || fail "manifest filter produced: $result"
+# The N1x list names linux-omarchy. It keeps the name on an image that boots
+# it, and the image's own kernel stands in everywhere else.
+result=$(filter_aarch64_packages linux-omarchy linux-omarchy linux-omarchy-headers 2>/dev/null | paste -sd' ')
+[[ $result == "linux-omarchy linux-omarchy-headers" ]] || fail "linux-omarchy lost its name on its own image: $result"
+result=$(filter_aarch64_packages linux-aarch64 linux-omarchy linux-omarchy-headers 2>/dev/null | paste -sd' ')
+[[ $result == "linux-aarch64 linux-aarch64-headers" ]] || fail "an image on another kernel asks for linux-omarchy: $result"
 
 grep -Fq -- '-e "OMARCHY_RUNTIME_PACKAGE=${OMARCHY_RUNTIME_PACKAGE:-}"' "$ROOT/bin/omarchy-iso-make" \
   || fail "the Omarchy package pair cannot be overridden for a --local-source build"
@@ -130,7 +130,7 @@ grep -Fq '"${base_pkg_lists[@]}" "${platform_lists[@]}"' "$ROOT/builder/build-is
 live="$ROOT/builder/linux-aarch64-live.sh"
 bash -n "$live"
 [[ -x $live ]] || fail "the linux-aarch64 live-kernel script is not executable"
-grep -Fq -- '--dev-ssh is only for images on linux-omarchy-n1x' "$ROOT/builder/build-iso.sh" \
+grep -Fq -- '--dev-ssh is only for images on linux-omarchy' "$ROOT/builder/build-iso.sh" \
   || fail "a dev key would reach an image on another kernel"
 grep -Fq 'install -Dm0755 /builder/linux-aarch64-live.sh "$build_cache_dir/airootfs/root/customize_airootfs.sh"' "$ROOT/builder/build-iso.sh" \
   || fail "linux-aarch64 builds do not make it the live kernel"
@@ -151,7 +151,8 @@ make_refuses() { # expected message, then arguments
 }
 make_refuses 'builds use the edge channel' --arch aarch64
 make_refuses '--kernel requires a kernel package name' --arch aarch64 --edge --kernel
-make_refuses 'requires --package-dir DIR' --arch aarch64 --kernel linux-omarchy-n1x --edge
+make_refuses 'requires --package-dir DIR' --arch aarch64 --edge
+make_refuses 'requires --package-dir DIR' --arch aarch64 --kernel linux-omarchy --edge
 make_refuses 'only valid with --arch aarch64' --kernel linux-aarch64
 make_refuses 'Unknown option: --platform' --arch aarch64 --platform n1x --edge
 
@@ -171,7 +172,7 @@ grep -Fq -- '--devicetree-auto=$dtb' "$uki" || fail "the live UKI carries no dev
 grep -Fq '*-el2.dtb' "$uki" || fail "EL2 device trees, which share hardware ids with their base trees, are not left out"
 # A kernel that ships no Snapdragon device trees gets no UKI, and the build goes on.
 if [[ ! -d /boot/dtbs/qcom ]]; then
-  out=$(bash "$uki" linux-omarchy-n1x) || fail "a kernel without Snapdragon device trees stops the build"
+  out=$(bash "$uki" linux-omarchy) || fail "a kernel without Snapdragon device trees stops the build"
   grep -Fq 'ships no Windows-on-ARM device trees' <<<"$out" || fail "a missing live UKI is not explained: $out"
 fi
 grep -Fq "chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi" "$ROOT/configs/grub/grub.cfg" || fail "GRUB does not chainload the live UKI"
@@ -250,7 +251,7 @@ mkdir -p "$fixture/lists"
 printf '%s\n' '# base' base-one gliff superwhisper-bin base-two >"$fixture/lists/omarchy-base.packages"
 printf '%s\n' '# aarch64' zram-generator rtkit base-one >"$fixture/lists/omarchy-aarch64.packages"
 printf '%s\n' '# x86_64 only' gliff superwhisper-bin >"$fixture/lists/omarchy-x86_64-only.packages"
-printf '%s\n' '# n1x' linux-omarchy-n1x rtkit >"$fixture/lists/omarchy-aarch64-n1x.packages"
+printf '%s\n' '# n1x' linux-omarchy rtkit >"$fixture/lists/omarchy-aarch64-n1x.packages"
 printf '%s\n' '# qualcomm' vulkan-freedreno >"$fixture/lists/omarchy-aarch64-qualcomm.packages"
 printf '%s\n' '# apple' asahi-audio >"$fixture/lists/omarchy-aarch64-apple.packages"
 composed=$(
@@ -267,7 +268,7 @@ composed=$(
   echo "--"
   printf '%s\n' "${platform_lists[@]##*/}"
 )
-[[ $composed == $'base-one\nbase-two\nzram-generator\nrtkit\n--\nbase-one\nbase-two\nzram-generator\nrtkit\nlinux-omarchy-n1x\n--\nbase-one\nbase-two\nzram-generator\nrtkit\nvulkan-freedreno\n--\nomarchy-base.aarch64-n1x.packages\nomarchy-base.aarch64-qualcomm.packages\n--\nomarchy-aarch64-n1x.packages\nomarchy-aarch64-qualcomm.packages' ]] \
+[[ $composed == $'base-one\nbase-two\nzram-generator\nrtkit\n--\nbase-one\nbase-two\nzram-generator\nrtkit\nlinux-omarchy\n--\nbase-one\nbase-two\nzram-generator\nrtkit\nvulkan-freedreno\n--\nomarchy-base.aarch64-n1x.packages\nomarchy-base.aarch64-qualcomm.packages\n--\nomarchy-aarch64-n1x.packages\nomarchy-aarch64-qualcomm.packages' ]] \
   || fail "aarch64 does not get the base list plus its architecture's additions, and one set per platform apart from Apple Silicon: $composed"
 composed=$(
   rm "$fixture/lists"/omarchy-aarch64*.packages "$fixture/lists/omarchy-x86_64-only.packages"

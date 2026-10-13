@@ -30,9 +30,9 @@ case "$OMARCHY_ARCH" in
       echo "ERROR: aarch64 builds boot linux-aarch64 or a kernel with a live preset in builder/ (got '$OMARCHY_KERNEL')" >&2
       exit 1
     fi
-    # No repository publishes linux-omarchy-n1x yet, so it comes in a bundle.
-    if [[ $OMARCHY_KERNEL == linux-omarchy-n1x && ! -d /packages ]]; then
-      echo "ERROR: linux-omarchy-n1x builds require the package bundle mounted at /packages" >&2
+    # No repository publishes linux-omarchy yet, so it comes in a bundle.
+    if [[ $OMARCHY_KERNEL == linux-omarchy && ! -d /packages ]]; then
+      echo "ERROR: linux-omarchy builds require the package bundle mounted at /packages" >&2
       exit 1
     fi
     if [[ -d /packages && ! -f /packages/SHA256SUMS ]]; then
@@ -254,7 +254,7 @@ for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopb
     -e "s|%KERNEL_OPTIONS%|$kernel_options|g" \
     "$grub_config"
 done
-if [[ $OMARCHY_KERNEL == linux-omarchy-n1x ]]; then
+if [[ $OMARCHY_KERNEL == linux-omarchy ]]; then
   # The live system's name on the network (releng's Ethernet DHCP with mDNS).
   printf '%s\n' omarchy-n1x-rescue >"$build_cache_dir/airootfs/etc/hostname"
 fi
@@ -262,8 +262,8 @@ if [[ -n ${OMARCHY_N1X_DEV_SSH:-} ]]; then
   # DEV ONLY (--dev-ssh): key-only SSH into the live ISO and the installed
   # system. See builder/n1x-dev-ssh/omarchy-n1x-dev-ssh; removing that
   # directory and this block removes it.
-  if [[ $OMARCHY_KERNEL != linux-omarchy-n1x ]]; then
-    echo "ERROR: --dev-ssh is only for images on linux-omarchy-n1x" >&2
+  if [[ $OMARCHY_KERNEL != linux-omarchy ]]; then
+    echo "ERROR: --dev-ssh is only for images on linux-omarchy" >&2
     exit 1
   fi
   install -Dm0755 /builder/n1x-dev-ssh/omarchy-n1x-dev-ssh "$build_cache_dir/airootfs/usr/local/sbin/omarchy-n1x-dev-ssh"
