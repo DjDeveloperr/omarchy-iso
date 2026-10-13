@@ -134,6 +134,9 @@ jobs:
         if: always()
         run: |
           base=$(ls -d test-runs/*-integration 2>/dev/null | head -1)
+          # Without the firmware's share and the total it is part of: in the
+          # aarch64 VM that is the runner's uptime, not the guest's.
+          boot() { head -1 "$1" | sed -E 's/in [^+]*\(firmware\) \+ /in /; s/ *=.*//'; }
           [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
             echo "## Install test"
@@ -147,12 +150,12 @@ jobs:
               echo
             fi
             if [ -f "$base/first-boot-systemd-analyze.txt" ]; then
-              echo "**First boot:** $(head -1 "$base/first-boot-systemd-analyze.txt")"
+              echo "**First boot:** $(boot "$base/first-boot-systemd-analyze.txt")"
               echo
             fi
             boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1)
             if [ -n "$boot_dir" ] && [ -f "$boot_dir/systemd-analyze.txt" ]; then
-              echo "**Everyday boot:** $(head -1 "$boot_dir/systemd-analyze.txt")"
+              echo "**Everyday boot:** $(boot "$boot_dir/systemd-analyze.txt")"
               echo
               echo "System state: $(jq -r .system_state "$boot_dir/boot-timing.json" 2>/dev/null)"
             fi
