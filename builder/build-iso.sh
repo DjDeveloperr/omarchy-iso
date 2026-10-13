@@ -23,16 +23,14 @@ case "$OMARCHY_ARCH" in
     ;;
   aarch64)
     online_pacman_conf=/configs/pacman-online-aarch64.conf
-    # One image serves every board, and the kernel is the only thing a build
-    # chooses. linux-aarch64 makes its own live setup
-    # (builder/linux-aarch64-live.sh); another kernel needs a live preset here.
-    if [[ $OMARCHY_KERNEL != linux-aarch64 && ! -f /builder/$OMARCHY_KERNEL.preset ]]; then
-      echo "ERROR: aarch64 builds boot linux-aarch64 or a kernel with a live preset in builder/ (got '$OMARCHY_KERNEL')" >&2
+    # One image serves every board, on one kernel.
+    if [[ $OMARCHY_KERNEL != linux-omarchy ]]; then
+      echo "ERROR: aarch64 builds boot linux-omarchy (got '$OMARCHY_KERNEL')" >&2
       exit 1
     fi
-    # No repository publishes linux-omarchy yet, so it comes in a bundle.
-    if [[ $OMARCHY_KERNEL == linux-omarchy && ! -d /packages ]]; then
-      echo "ERROR: linux-omarchy builds require the package bundle mounted at /packages" >&2
+    # No repository publishes linux-omarchy for aarch64 yet, so it comes in a bundle.
+    if [[ ! -d /packages ]]; then
+      echo "ERROR: aarch64 builds require the package bundle mounted at /packages" >&2
       exit 1
     fi
     if [[ -d /packages && ! -f /packages/SHA256SUMS ]]; then
@@ -203,34 +201,20 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # I2C-HID keyboard modules.
   configure_archiso_aarch64_mkinitcpio "$build_cache_dir/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
   boot_splash_kernel_options="quiet splash "
-  if [[ $OMARCHY_KERNEL == linux-aarch64 ]]; then
-    # linux-aarch64 owns its preset and names its image /boot/Image, so the
-    # live preset, kernel name and initramfs are made after pacstrap, inside
-    # the image.
-    install -Dm0755 /builder/linux-aarch64-live.sh "$build_cache_dir/airootfs/root/customize_airootfs.sh"
-    # Both consoles: a VM or a server is watched over its serial port, a
-    # machine with a panel on the panel. The last one named is /dev/console.
-    kernel_options="console=ttyAMA0,115200 console=tty0 initramfs_async=0"
-  else
-    cp "/builder/${OMARCHY_KERNEL}.preset" "$build_cache_dir/airootfs/etc/mkinitcpio.d/${OMARCHY_KERNEL}.preset"
-    # The N1x firmware's SPCR serial console would take the console from the
-    # panel, hence console=tty0 acpi=nospcr.
-    kernel_options="console=tty0 acpi=nospcr initramfs_async=0"
-  fi
+  cp "/builder/${OMARCHY_KERNEL}.preset" "$build_cache_dir/airootfs/etc/mkinitcpio.d/${OMARCHY_KERNEL}.preset"
+  # The N1x firmware's SPCR serial console would take the console from the
+  # panel, hence console=tty0 acpi=nospcr.
+  kernel_options="console=tty0 acpi=nospcr initramfs_async=0"
   # Snapdragon firmware hands the kernel no device tree. Once the live kernel
   # and initramfs exist, wrap them in a UKI that carries the device trees the
   # kernel package ships; GRUB chainloads it where there is one
-  # (configs/grub/grub.cfg). A kernel that ships none gets no UKI.
-  if [[ -f $build_cache_dir/airootfs/root/customize_airootfs.sh ]]; then
-    mv "$build_cache_dir/airootfs/root/customize_airootfs.sh" "$build_cache_dir/airootfs/root/linux-aarch64-live.sh"
-  fi
+  # (configs/grub/grub.cfg).
   install -Dm0644 /builder/qualcomm/live-uki.sh "$build_cache_dir/airootfs/root/qualcomm-live-uki.sh"
   cat >"$build_cache_dir/airootfs/root/customize_airootfs.sh" <<CUSTOMIZE
 #!/bin/bash
 set -euo pipefail
-[[ ! -f /root/linux-aarch64-live.sh ]] || bash /root/linux-aarch64-live.sh
 bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL
-rm -f /root/linux-aarch64-live.sh /root/qualcomm-live-uki.sh
+rm -f /root/qualcomm-live-uki.sh
 CUSTOMIZE
   chmod 0755 "$build_cache_dir/airootfs/root/customize_airootfs.sh"
   # The DSP driver stays out of the live initramfs (see grub.cfg). On the one
@@ -254,7 +238,7 @@ for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopb
     -e "s|%KERNEL_OPTIONS%|$kernel_options|g" \
     "$grub_config"
 done
-if [[ $OMARCHY_KERNEL == linux-omarchy ]]; then
+if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # The live system's name on the network (releng's Ethernet DHCP with mDNS).
   printf '%s\n' omarchy-n1x-rescue >"$build_cache_dir/airootfs/etc/hostname"
 fi
@@ -262,8 +246,8 @@ if [[ -n ${OMARCHY_N1X_DEV_SSH:-} ]]; then
   # DEV ONLY (--dev-ssh): key-only SSH into the live ISO and the installed
   # system. See builder/n1x-dev-ssh/omarchy-n1x-dev-ssh; removing that
   # directory and this block removes it.
-  if [[ $OMARCHY_KERNEL != linux-omarchy ]]; then
-    echo "ERROR: --dev-ssh is only for images on linux-omarchy" >&2
+  if [[ $OMARCHY_ARCH != aarch64 ]]; then
+    echo "ERROR: --dev-ssh is only for aarch64 images" >&2
     exit 1
   fi
   install -Dm0755 /builder/n1x-dev-ssh/omarchy-n1x-dev-ssh "$build_cache_dir/airootfs/usr/local/sbin/omarchy-n1x-dev-ssh"

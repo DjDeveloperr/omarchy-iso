@@ -21,7 +21,7 @@ bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/n1x-dev-ssh/omarchy-n1x-dev-ssh" "$ROOT/configs/airootfs/root/.automated_script.sh"
 
 grep -Fq 'menci/archlinuxarm@sha256:' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest"
-grep -Fq -- 'an aarch64 build on linux-omarchy requires --package-dir DIR' "$ROOT/bin/omarchy-iso-make" || fail "the N1x kernel must come with its package bundle"
+grep -Fq -- 'an aarch64 build requires --package-dir DIR' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 build must come with its package bundle"
 grep -Fq 'ships no $required' "$ROOT/builder/build-iso.sh" || fail "a runtime without the platform support is not refused"
 for required in bin/omarchy-hw-platform install/hardware/qualcomm/dtb-uki.sh install/omarchy-aarch64-qualcomm.packages \
   install/omarchy-aarch64-n1x.packages install/omarchy-aarch64-gb10.packages; do
@@ -32,7 +32,8 @@ grep -Fq 'sha256sum --check --strict --quiet SHA256SUMS' "$ROOT/bin/omarchy-iso-
 grep -Fq -- '-v "$PACKAGE_DIR:/packages:ro"' "$ROOT/bin/omarchy-iso-make" || fail "bundle is not mounted read-only at /packages"
 grep -Fq 'OMARCHY_ARCH == x86_64 && -d /var/cache/pacman/pkg' "$ROOT/bin/omarchy-iso-make" || fail "host pacman cache would leak into aarch64 builds"
 grep -Fq 'builds use the edge channel' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 builds must be pinned to the edge channel"
-grep -Fq 'OMARCHY_KERNEL=${ARM_KERNEL:-linux-omarchy}' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 image does not boot linux-omarchy unless told otherwise"
+grep -Fq 'OMARCHY_KERNEL=linux-omarchy' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 image does not boot linux-omarchy"
+grep -Fq -- '--kernel' "$ROOT/bin/omarchy-iso-make" && fail "an aarch64 build still offers a choice of kernel"
 grep -Fq 'OMARCHY_ARM_PLATFORM' "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" && fail "an aarch64 build still asks which board it is for"
 grep -Fq "ALL_kver='/boot/vmlinuz-linux-omarchy'" "$ROOT/builder/linux-omarchy.preset" || fail "the live preset does not boot linux-omarchy"
 grep -Fq 'echo "$OMARCHY_KERNEL" > "$build_cache_dir/airootfs/root/omarchy_kernel"' "$ROOT/builder/build-iso.sh" || fail "the installer is not told which kernel to install"
@@ -63,7 +64,7 @@ for cfg in grub.cfg loopback.cfg; do
   grep -Fq -- "--id 'n1x-recovery'" "$src" || fail "$cfg lacks the N1x recovery entry"
   grep -Fq 'omarchy.n1x_recovery=1 acpi=nospcr' "$src" || fail "$cfg recovery entry lacks acpi=nospcr"
   source "$ROOT/builder/grub-platform.sh"
-  for platform in linux-t2 linux-omarchy linux-aarch64; do
+  for platform in linux-t2 linux-omarchy; do
     cp "$src" "$fixture/$platform-$cfg"
     configure_grub_kernel "$fixture/$platform-$cfg" "$platform"
     sed -i -e 's|%KERNEL%|linux-omarchy|g' -e 's|%BOOT_SPLASH_KERNEL_OPTIONS%|quiet splash |g' -e 's|%KERNEL_OPTIONS%|console=tty0|g' \
@@ -100,12 +101,9 @@ grep -Fq 'smbios --type 4 --get-string 7 --set cpu_maker' "$grub" || fail "GRUB 
 source "$ROOT/builder/aarch64-package-filter.sh"
 result=$(filter_aarch64_packages linux-omarchy linux linux-headers linux-omarchy linux-omarchy-headers amd-ucode broadcom-wl-dkms tzupdate lib32-nvidia-utils dell-xps13-sidecar-amps linux-firmware-cirrus-dx13260 apple-bcm-firmware-fetcher superwhisper-bin mise-bin nvim vi obs-studio yay-debug hyprland omarchy-dev 2>/dev/null | tr '\n' ' ')
 [[ $result == "linux-omarchy linux-omarchy-headers linux-omarchy linux-omarchy-headers tzupdate mise-bin neovim ex-vi-compat hyprland omarchy-dev " ]] || fail "manifest filter produced: $result"
-# The N1x list names linux-omarchy. It keeps the name on an image that boots
-# it, and the image's own kernel stands in everywhere else.
+# The N1x list names linux-omarchy, and keeps the name.
 result=$(filter_aarch64_packages linux-omarchy linux-omarchy linux-omarchy-headers 2>/dev/null | paste -sd' ')
 [[ $result == "linux-omarchy linux-omarchy-headers" ]] || fail "linux-omarchy lost its name on its own image: $result"
-result=$(filter_aarch64_packages linux-aarch64 linux-omarchy linux-omarchy-headers 2>/dev/null | paste -sd' ')
-[[ $result == "linux-aarch64 linux-aarch64-headers" ]] || fail "an image on another kernel asks for linux-omarchy: $result"
 
 grep -Fq -- '-e "OMARCHY_RUNTIME_PACKAGE=${OMARCHY_RUNTIME_PACKAGE:-}"' "$ROOT/bin/omarchy-iso-make" \
   || fail "the Omarchy package pair cannot be overridden for a --local-source build"
@@ -125,19 +123,14 @@ grep -Fq '"${base_pkg_lists[@]}" "${platform_lists[@]}"' "$ROOT/builder/build-is
   || fail "the offline mirror does not carry every platform's own packages"
 
 # --- one image for every board ------------------------------------------------
-# Arch Linux ARM's kernel unless the build names another, the published
-# packages, and nothing that asks which board the image is for.
-live="$ROOT/builder/linux-aarch64-live.sh"
-bash -n "$live"
-[[ -x $live ]] || fail "the linux-aarch64 live-kernel script is not executable"
-grep -Fq -- '--dev-ssh is only for images on linux-omarchy' "$ROOT/builder/build-iso.sh" \
-  || fail "a dev key would reach an image on another kernel"
-grep -Fq 'install -Dm0755 /builder/linux-aarch64-live.sh "$build_cache_dir/airootfs/root/customize_airootfs.sh"' "$ROOT/builder/build-iso.sh" \
-  || fail "linux-aarch64 builds do not make it the live kernel"
-grep -Fq 'kernel_options="console=ttyAMA0,115200 console=tty0 initramfs_async=0"' "$ROOT/builder/build-iso.sh" \
-  || fail "a linux-aarch64 image cannot be watched over its serial port"
-grep -Fq "cp -a \"\$image\" /boot/vmlinuz-linux-aarch64" "$live" || fail "mkarchiso would find no kernel to copy"
-grep -Fq "archiso_image='/boot/initramfs-linux-aarch64.img'" "$live" || fail "GRUB would find no live initramfs"
+# linux-omarchy and nothing else, and nothing that asks which board the image
+# is for.
+[[ ! -e $ROOT/builder/linux-aarch64-live.sh ]] || fail "the build still carries Arch Linux ARM's kernel as a live kernel"
+grep -Fq "ERROR: aarch64 builds boot linux-omarchy" "$ROOT/builder/build-iso.sh" || fail "an aarch64 build accepts another kernel"
+grep -Fq -- '--dev-ssh is only for aarch64 images' "$ROOT/builder/build-iso.sh" \
+  || fail "a dev key would reach an x86_64 image"
+grep -Fq 'kernel_options="console=tty0 acpi=nospcr initramfs_async=0"' "$ROOT/builder/build-iso.sh" \
+  || fail "the N1x firmware's serial console would take the console from the panel"
 # Without a bundle the [platform] repo must go: pacman refuses a repo it cannot sync.
 strip=$(grep -F "awk '/^\\[platform\\]$/" "$ROOT/builder/build-iso.sh" | sed -E "s/.*awk '([^']*)'.*/\1/")
 [[ -n $strip ]] || fail "builds without a bundle keep the [platform] repo"
@@ -150,10 +143,9 @@ make_refuses() { # expected message, then arguments
   grep -Fq -- "$want" <<<"$out" || fail "omarchy-iso-make $*: expected '$want', got: $out"
 }
 make_refuses 'builds use the edge channel' --arch aarch64
-make_refuses '--kernel requires a kernel package name' --arch aarch64 --edge --kernel
 make_refuses 'requires --package-dir DIR' --arch aarch64 --edge
-make_refuses 'requires --package-dir DIR' --arch aarch64 --kernel linux-omarchy --edge
-make_refuses 'only valid with --arch aarch64' --kernel linux-aarch64
+make_refuses 'Unknown option: --kernel' --arch aarch64 --edge --kernel linux-aarch64
+make_refuses 'only valid with --arch aarch64' --package-dir /tmp
 make_refuses 'Unknown option: --platform' --arch aarch64 --platform n1x --edge
 
 # The live UKI that carries the Snapdragon laptops' device trees, since their
@@ -162,23 +154,21 @@ uki="$ROOT/builder/qualcomm/live-uki.sh"
 bash -n "$uki"
 grep -Fq 'parted systemd-ukify linux-firmware-qcom qcom-firmware-extract)' "$ROOT/builder/build-iso.sh" \
   || fail "the live image lacks ukify or the Snapdragon firmware tools"
-# The live scripts run in order, from one customize step: the kernel and
-# initramfs first, then the UKI that wraps them.
+# The UKI is built in the image's customize step, once pacstrap has made the
+# kernel and initramfs it wraps.
 customize=$(sed -n "/<<CUSTOMIZE$/,/^CUSTOMIZE$/p" "$ROOT/builder/build-iso.sh")
-[[ $(grep -F -e 'bash /root/linux-aarch64-live.sh' -e 'bash /root/qualcomm-live-uki.sh' <<<"$customize" | sed -E 's/.*(bash [^ ]+).*/\1/' | paste -sd' ') \
-  == 'bash /root/linux-aarch64-live.sh bash /root/qualcomm-live-uki.sh' ]] || fail "the live UKI is not built after the live kernel"
 grep -Fq 'bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL' <<<"$customize" || fail "the live UKI is not told which kernel to wrap"
 grep -Fq -- '--devicetree-auto=$dtb' "$uki" || fail "the live UKI carries no device trees"
 grep -Fq '*-el2.dtb' "$uki" || fail "EL2 device trees, which share hardware ids with their base trees, are not left out"
 # A kernel that ships no Snapdragon device trees gets no UKI, and the build goes on.
-if [[ ! -d /boot/dtbs/qcom ]]; then
+if [[ ! -d /boot/dtbs/linux-omarchy/qcom ]]; then
   out=$(bash "$uki" linux-omarchy) || fail "a kernel without Snapdragon device trees stops the build"
   grep -Fq 'ships no Windows-on-ARM device trees' <<<"$out" || fail "a missing live UKI is not explained: $out"
 fi
 grep -Fq "chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi" "$ROOT/configs/grub/grub.cfg" || fail "GRUB does not chainload the live UKI"
 grep -Fq "modprobe.blacklist=qcom_q6v5_pas" "$ROOT/configs/grub/grub.cfg" || fail "the live UKI entry loads the DSP driver in the initramfs"
 grep -F 'omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq ' iommu.passthrough=0 ' || fail "the live UKI entry leaves device memory access untranslated"
-grep -Fq '[[ ! -d /boot/dtbs/$1/qcom ]] || dtb_dir=/boot/dtbs/$1/qcom' "$uki" || fail "the live UKI ignores the device trees a kernel keeps under its own name"
+grep -Fqx 'dtb_dir=/boot/dtbs/$1/qcom' "$uki" || fail "the live UKI does not take the device trees the kernel keeps under its own name"
 # mkarchiso copies the UKI onto the ISO only with this patch, applied after the GRUB one.
 if [[ -f "$ROOT/archiso/archiso/mkarchiso" ]]; then
   cp "$ROOT/archiso/archiso/mkarchiso" "$fixture/mkarchiso-qualcomm"
