@@ -25,6 +25,12 @@ jobs:
   # .github/VOUCHED.td (read from the default branch, so a pull request cannot
   # vouch for itself). Whether the pull request comes from a fork does not
   # matter. Anyone else gets GitHub's runner.
+  #
+  # This chooses the runner for an honest pull request. It does not stop a
+  # dishonest one: GitHub runs a pull request's own copy of this file, which
+  # can ask for any runner. What stops that is the repository holding outside
+  # contributors' workflow runs until a maintainer approves them (Settings,
+  # Actions, "Approval for running fork pull request workflows").
   trust:
     name: "Is the author trusted to use our runners"
     runs-on: ubuntu-26.04
