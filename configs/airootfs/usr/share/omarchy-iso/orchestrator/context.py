@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .keyboard import validate_input_selection
+from .language import validate_language
 
 
 @dataclass
@@ -60,6 +61,10 @@ class InstallContext:
             user_configuration["kernels"] = [kernel]
 
         validate_input_selection(omarchy_install.get("input_method"), omarchy_install.get("input_xkb_layout", ""))
+
+        # The language picked first in the configurator. Configs from before
+        # that step (an older autoinstall drive) carry none and mean English.
+        omarchy_install["language"] = validate_language(omarchy_install.get("language"))
 
         # Deferred provisioning: the whole system installs but user creation is deferred to
         # first boot. Selected by the configurator (omarchy_install.defer_provisioning) or by

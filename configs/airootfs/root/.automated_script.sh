@@ -115,6 +115,9 @@ fi
 # the actual installer as a non-interactive child, logs child output, waits for
 # completion, then renders the final installed-time/reboot prompt itself.
 export OMARCHY_DASHBOARD_TTY="$(tty)"
+# The dashboard speaks the language the configurator's screens spoke, which it
+# leaves in installer_language. An autoinstall has no such file: English.
+export OMARCHY_DASHBOARD_LANGUAGE_FILE=/root/installer_language
 rm -f /run/omarchy-install/state.json
 /usr/local/bin/omarchy-install-dashboard \
   "$OMARCHY_INSTALL_LOG_FILE" \

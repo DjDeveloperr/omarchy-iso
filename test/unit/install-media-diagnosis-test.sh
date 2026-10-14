@@ -273,6 +273,33 @@ mkdir -p "$omarchy_share"
   printf 'logo bottom row%*s\n' 66 ''
 } >"$omarchy_share/logo.txt"
 
+# The dashboard prints every visible line through the runtime's omarchy-i18n,
+# which this repo doesn't carry. A stand-in with the English for the lines
+# checked here; any other key prints as itself, which still occupies its row.
+mkdir -p "$omarchy_share/bin"
+cat >"$omarchy_share/bin/omarchy-i18n" <<'I18N'
+#!/bin/bash
+key=$1
+shift
+case $key in
+  installer.installationStopped) text="Omarchy installation stopped" ;;
+  installer.exitStatus) text="Installer exited with status %1" ;;
+  installer.lastPhase) text="last installer phase: %1" ;;
+  installer.failedPhase) text="failed phase: %1: %2" ;;
+  installer.lastLogLines) text="Last log lines:" ;;
+  installer.lastTargetLogLines) text="Last target log lines:" ;;
+  installer.getHelp) text="Get help at %1" ;;
+  *) text=$key ;;
+esac
+n=1
+for arg in "$@"; do
+  text=${text//%$n/$arg}
+  n=$((n + 1))
+done
+printf '%s' "$text"
+I18N
+chmod +x "$omarchy_share/bin/omarchy-i18n"
+
 run_dashboard() {
   local install_log="$1"
 

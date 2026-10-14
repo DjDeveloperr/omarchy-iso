@@ -24,6 +24,27 @@ INSTALL_CMD=("$@")
 TTY_PATH="${OMARCHY_DASHBOARD_TTY:-/dev/tty}"
 LOGO_PATH="${OMARCHY_PATH:-/usr/share/omarchy}/logo.txt"
 
+# Every visible line speaks the language the configurator's screens spoke,
+# which it leaves in the file OMARCHY_DASHBOARD_LANGUAGE_FILE names (absent on
+# an autoinstall: English). Only these calls see it: the installer child
+# inherits this environment, and nothing it runs in the target should read the
+# live ISO's choice.
+DASHBOARD_LANGUAGE_FILE="${OMARCHY_DASHBOARD_LANGUAGE_FILE:-/dev/null}"
+i18n() {
+  OMARCHY_LANGUAGE_FILE="$DASHBOARD_LANGUAGE_FILE" \
+    "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-i18n" "$@" 2>/dev/null || true
+}
+
+# The progress frame redraws ten times a second, so its rotating lines are
+# translated once, on first sight, and kept. Sets REPLY rather than printing,
+# so the cache survives (a command substitution would run it in a subshell).
+declare -A I18N_CACHE=()
+cached_i18n() {
+  local key="$1"
+  [[ -v I18N_CACHE[$key] ]] || I18N_CACHE[$key]="$(i18n "$key")"
+  REPLY="${I18N_CACHE[$key]}"
+}
+
 # Autoinstall has no one at the keyboard, and every prompt this dashboard owns
 # reads from the TTY, so each would hang forever. Suppress them here rather than
 # in the scripts they live in: this process is the only owner of the visible UI.
@@ -51,41 +72,43 @@ export GUM_CONFIRM_UNSELECTED_BACKGROUND="${GUM_CONFIRM_UNSELECTED_BACKGROUND:-0
 child_pid=""
 child_pgid=""
 
+# Catalog keys, shown in this order.
 whimsy=(
-  "delivering delightful defaults"
-  "saving setup struggles"
-  "picking polished packages"
-  "curating cohesive colors"
-  "preparing pleasant pixels"
-  "hyping happy hyprland"
-  "integrating intuitive interfaces"
-  "bootstrapping beautiful boxes"
-  "crafting cozy commands"
-  "making machines marvelous"
-  "polishing pretty pixels"
-  "tuning tasteful terminals"
-  "weaving wonderful workflows"
+  installer.whimsyDefaults
+  installer.whimsyStruggles
+  installer.whimsyPackages
+  installer.whimsyColors
+  installer.whimsyPixels
+  installer.whimsyHyprland
+  installer.whimsyInterfaces
+  installer.whimsyBoxes
+  installer.whimsyCommands
+  installer.whimsyMachines
+  installer.whimsyPrettyPixels
+  installer.whimsyTerminals
+  installer.whimsyWorkflows
 )
 
+# The same tips, in the same keys, as the first-boot owner setup shows.
 tips=(
-  "Super + Space opens the Omarchy menu for apps, settings, and more"
-  "Super + K shows all the key bindings"
-  "Super is the Windows or command key on your keyboard"
-  "Use Xournal++ to sign PDFs"
-  "Share files with phones and laptops using LocalSend"
-  "Turn any website into an app with Install > Web App in the menu"
-  "Super + Return opens a terminal, Super + Shift + Return the browser"
-  "Edit images with Pinta, videos with Kdenlive, docs with LibreOffice"
-  "Super + Ctrl + Print grabs text off the screen with OCR"
-  "Print takes a screenshot, Alt + Print records the screen"
-  "Set a reminder with Super + Ctrl + R"
-  "Switch themes from Style > Theme in the Omarchy menu"
-  "Double-click the menu bar to make it transparent"
-  "Run a full Windows VM via Install > Windows in the menu"
-  "Super + Ctrl + V opens the clipboard manager"
-  "Super + 1 through 0 switches workspaces, add Shift to bring the window"
-  "Super + Print picks a color from anywhere on screen"
-  "Keep the system fresh with Update in the Omarchy menu"
+  provision.tipMenu
+  provision.tipKeyBindings
+  provision.tipSuperKey
+  provision.tipSigned
+  provision.tipLocalSend
+  provision.tipWebApp
+  provision.tipTerminalBrowser
+  provision.tipEditors
+  provision.tipOcr
+  provision.tipScreenshot
+  provision.tipReminder
+  provision.tipTheme
+  provision.tipTransparentBar
+  provision.tipWindowsVm
+  provision.tipClipboard
+  provision.tipWorkspaces
+  provision.tipColorPicker
+  provision.tipUpdate
 )
 
 cleanup() {
@@ -607,14 +630,23 @@ install_progress() {
 
 # Keep the original loading messages on their own clock, so progress jumps
 # cannot skip phrases and animation frame rate does not change their cadence.
+# Sets REPLY, like cached_i18n.
 current_whimsy() {
-  printf '%s' "${whimsy[$(( (NOW - DASH_T0) / 4 % ${#whimsy[@]} ))]}"
+  cached_i18n "${whimsy[$(( (NOW - DASH_T0) / 4 % ${#whimsy[@]} ))]}"
 }
 
 # One tip per 8 seconds, in order. Use elapsed time, since rendering can stretch
 # under pacstrap I/O, when the tips may be the most visible sign of activity.
+# Sets REPLY to the whole "Tip: ..." line, cached under the tip's key.
 current_tip() {
-  printf '%s' "${tips[$(( (NOW - DASH_T0) / 8 % ${#tips[@]} ))]}"
+  local key="${tips[$(( (NOW - DASH_T0) / 8 % ${#tips[@]} ))]}"
+  if [[ ! -v I18N_CACHE[line:$key] ]]; then
+    cached_i18n "$key"
+    local tip="$REPLY"
+    cached_i18n provision.tip
+    I18N_CACHE[line:$key]="$REPLY $tip"
+  fi
+  REPLY="${I18N_CACHE[line:$key]}"
 }
 
 # Vertically center a block of the given height, echoing the row it starts on.
@@ -677,8 +709,10 @@ render_dynamic() {
   DISPLAY_PM=$((DISPLAY_PM + step))
   render_icon "$DISPLAY_PM"
 
-  message="$(truncate_for_width "$(current_whimsy)" "$PROGRESS_TEXT_WIDTH")"
-  tip="$(truncate_for_width "Tip: $(current_tip)" "$PROGRESS_TEXT_WIDTH")"
+  current_whimsy
+  message="$(truncate_for_width "$REPLY" "$PROGRESS_TEXT_WIDTH")"
+  current_tip
+  tip="$(truncate_for_width "$REPLY" "$PROGRESS_TEXT_WIDTH")"
   printf '%s%d;1H' "$CSI" "$((TOP_ROW + ICON_HEIGHT + 1))"
   center "${GREEN}$((DISPLAY_PM / 10))%${RESET}" "$PROGRESS_TEXT_WIDTH"
   center "${GREEN}${message}${RESET}" "$PROGRESS_TEXT_WIDTH"
@@ -718,9 +752,13 @@ install_duration() {
 }
 
 render_finish() {
-  local duration effect_canvas_width title="Installed Omarchy"
+  local duration effect_canvas_width title
   duration="$(install_duration || true)"
-  [[ -n $duration ]] && title+=" in ${duration}"
+  if [[ -n $duration ]]; then
+    title="$(i18n installer.installedIn "$duration")"
+  else
+    title="$(i18n installer.installed)"
+  fi
   # ttfx centers its text two columns right of plain centering. A canvas two
   # columns narrower aligns the animation with the title and fallback logo.
   effect_canvas_width="$(term_cols)"
@@ -765,7 +803,7 @@ render_finish() {
 }
 
 reboot_prompt() {
-  local prompt_pad
+  local prompt_pad label
 
   # Nobody to confirm; the OMARCHY_UI_AUTO_REBOOT check at the call site still
   # applies, so setting both stops on the finish screen without a keyboard.
@@ -776,13 +814,16 @@ reboot_prompt() {
   # gum allows. FINISH_HEIGHT budgets for the same three rows.
   printf '%s%d;1H%s' "$CSI" "$((FINISH_TOP_ROW + LOGO_HEIGHT + 2))" "$CLEAR_LINE" >"$TTY_PATH"
 
-  prompt_pad=$(( ( $(term_cols) - 18 ) / 2 ))
+  # Center the button, which is its label plus eight columns of gum's padding
+  # (18 for the English "Reboot Now").
+  label="$(i18n installer.rebootNow)"
+  prompt_pad=$(( ( $(term_cols) - ${#label} - 8 ) / 2 ))
   (( prompt_pad < 0 )) && prompt_pad=0
   gum confirm \
     --padding "0 0 0 $prompt_pad" \
     --show-help=false \
     --default \
-    --affirmative "Reboot Now" \
+    --affirmative "$label" \
     --negative "" \
     "" <"$TTY_PATH" >"$TTY_PATH" 2>&1
 }
@@ -819,8 +860,11 @@ render_failure_log_tail() {
   fi
   [[ -f $tail_log ]] || return 0
 
-  label="Last log lines:"
-  [[ $tail_log == /mnt/* ]] && label="Last target log lines:"
+  if [[ $tail_log == /mnt/* ]]; then
+    label="$(i18n installer.lastTargetLogLines)"
+  else
+    label="$(i18n installer.lastLogLines)"
+  fi
   line_at "$CONTENT_WIDTH" 2 "${DIM}${label}${RESET}"
   printf '\n'
   tail -n "$lines" "$tail_log" 2>/dev/null | while IFS= read -r line; do
@@ -843,7 +887,7 @@ find_log_uploader() {
 }
 
 prompt_enter() {
-  printf '\nPress Enter to continue…' >"$TTY_PATH"
+  printf '\n%s' "$(i18n installer.pressEnter)" >"$TTY_PATH"
   IFS= read -r _ <"$TTY_PATH" || true
 }
 
@@ -854,9 +898,14 @@ upload_failure_log() {
     "$uploader" install >"$TTY_PATH" 2>&1 || true
   else
     {
-      echo "No log uploader is available in this environment."
-      echo "Install log: $LOG_FILE"
-      [[ -f /mnt/var/log/omarchy-install.log ]] && echo "Target log: /mnt/var/log/omarchy-install.log"
+      i18n installer.noLogUploader
+      echo
+      i18n installer.installLog "$LOG_FILE"
+      echo
+      if [[ -f /mnt/var/log/omarchy-install.log ]]; then
+        i18n installer.targetLog /mnt/var/log/omarchy-install.log
+        echo
+      fi
     } >"$TTY_PATH"
   fi
   prompt_enter
@@ -922,8 +971,8 @@ render_failure() {
   blank_line
   render_logo
   blank_line
-  center "${RED}Omarchy installation stopped${RESET}" "$CONTENT_WIDTH"
-  center "Installer exited with status $status" "$CONTENT_WIDTH"
+  center "${RED}$(i18n installer.installationStopped)${RESET}" "$CONTENT_WIDTH"
+  center "$(i18n installer.exitStatus "$status")" "$CONTENT_WIDTH"
 
   render_media_diagnosis "$media_diagnosis"
 
@@ -938,17 +987,25 @@ render_failure() {
   blank_line
   render_failure_log_tail "$(media_diagnosis_rows "$media_diagnosis")"
   blank_line
-  center "${DIM}Get help at https://omarchy.org/discord${RESET}" "$CONTENT_WIDTH"
+  center "${DIM}$(i18n installer.getHelp https://omarchy.org/discord)${RESET}" "$CONTENT_WIDTH"
   blank_line
 }
 
 failure_menu() {
-  local choice uploader
+  local choice uploader upload view shell reboot_label poweroff header
 
   [[ ${OMARCHY_UI_FAILURE_ACTION:-} == "exit" ]] && return 0
   # The failure screen and log tail have already rendered; exit with the
   # installer's status instead of blocking on a menu nobody can answer.
   interactive || return 0
+
+  # Shown translated, so the answer is compared with the same strings.
+  header="$(i18n installer.failureWhatNext)"
+  upload="$(i18n installer.uploadLog)"
+  view="$(i18n installer.viewLog)"
+  shell="$(i18n installer.dropToShell)"
+  reboot_label="$(i18n installer.reboot)"
+  poweroff="$(i18n installer.powerOff)"
 
   while true; do
     uploader=""
@@ -956,40 +1013,40 @@ failure_menu() {
     if [[ -n $uploader ]]; then
       choice=$(gum choose \
         --height 6 \
-        --header "What would you like to do?" \
-        "Upload log for support" \
-        "View full log" \
-        "Drop to shell" \
-        "Reboot" \
-        "Power off" \
-        <"$TTY_PATH" 2>"$TTY_PATH") || choice="Drop to shell"
+        --header "$header" \
+        "$upload" \
+        "$view" \
+        "$shell" \
+        "$reboot_label" \
+        "$poweroff" \
+        <"$TTY_PATH" 2>"$TTY_PATH") || choice="$shell"
     else
       choice=$(gum choose \
         --height 5 \
-        --header "What would you like to do?" \
-        "View full log" \
-        "Drop to shell" \
-        "Reboot" \
-        "Power off" \
-        <"$TTY_PATH" 2>"$TTY_PATH") || choice="Drop to shell"
+        --header "$header" \
+        "$view" \
+        "$shell" \
+        "$reboot_label" \
+        "$poweroff" \
+        <"$TTY_PATH" 2>"$TTY_PATH") || choice="$shell"
     fi
 
     case "$choice" in
-      "Upload log for support")
+      "$upload")
         upload_failure_log
         render_failure "${failure_status:-1}" "${failure_summary:-}" "${failure_media_diagnosis:-}" >"$TTY_PATH" 2>/dev/null || true
         ;;
-      "View full log")
+      "$view")
         view_failure_log
         render_failure "${failure_status:-1}" "${failure_summary:-}" "${failure_media_diagnosis:-}" >"$TTY_PATH" 2>/dev/null || true
         ;;
-      "Reboot")
+      "$reboot_label")
         reboot 2>/dev/null || systemctl reboot 2>/dev/null || true
         ;;
-      "Power off")
+      "$poweroff")
         poweroff 2>/dev/null || systemctl poweroff 2>/dev/null || true
         ;;
-      "Drop to shell"|"")
+      "$shell"|"")
         return 0
         ;;
     esac
@@ -1066,15 +1123,21 @@ if (( status != 0 )); then
   failure_status="$status"
   failure_summary=""
   if [[ -f $STATE_FILE ]]; then
-    failure_summary="$(jq -r '
-      (.current_phase // empty | "last installer phase: \(.)"),
-      ((.phases // []) | map(select(.status == "failed")) | last // empty
-        | "failed phase: \(.name): \(.error)")
-    ' "$STATE_FILE" 2>/dev/null || true)"
-    if [[ -n $failure_summary ]]; then
-      while IFS= read -r line; do
-        [[ -n $line ]] && dashboard_log "$line"
-      done <<<"$failure_summary"
+    # The phase names and the error are the installer's own English, for the
+    # support log as much as the screen; only the words around them are
+    # translated, and the log keeps English throughout.
+    current_phase="$(jq -r '.current_phase // empty' "$STATE_FILE" 2>/dev/null || true)"
+    if [[ -n $current_phase ]]; then
+      dashboard_log "last installer phase: $current_phase"
+      failure_summary+="$(i18n installer.lastPhase "$current_phase")"$'\n'
+    fi
+    failed_name="$(jq -r '(.phases // []) | map(select(.status == "failed")) | last // empty | .name' \
+      "$STATE_FILE" 2>/dev/null || true)"
+    if [[ -n $failed_name ]]; then
+      failed_error="$(jq -r '(.phases // []) | map(select(.status == "failed")) | last | .error' \
+        "$STATE_FILE" 2>/dev/null || true)"
+      dashboard_log "failed phase: $failed_name: $failed_error"
+      failure_summary+="$(i18n installer.failedPhase "$failed_name" "$failed_error")"$'\n'
     fi
   fi
   failure_media_diagnosis="$(diagnose_media || true)"
@@ -1109,7 +1172,7 @@ if (( finish_render_status != 0 )); then
   dashboard_log "finish screen render failed with status $finish_render_status; using fallback"
   {
     printf '%s%s' "$SHOW_CURSOR" "$CLEAR"
-    printf '\nFinished installing\n\n'
+    printf '\n%s\n\n' "$(i18n installer.finishedInstalling)"
   } >"$TTY_PATH" 2>/dev/null || true
 fi
 

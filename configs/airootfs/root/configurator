@@ -9,11 +9,11 @@ OMARCHY_SETTINGS_PACKAGE="${OMARCHY_SETTINGS_PACKAGE:-omarchy-settings}"
 
 LOGO_PATH="$OMARCHY_PATH/logo.txt"
 
-# The setup form — keyboard, account, hostname, and timezone questions, plus the
-# rules their answers are checked against — shared verbatim with the first-boot
-# owner setup that finishes a deferred install. build-iso.sh vendors it out of
-# the runtime package this ISO bundles, so the two can never offer different
-# layouts or accept different usernames. On the ISO that vendored copy is what
+# The setup form — language, keyboard, account, hostname, and timezone
+# questions, plus the rules their answers are checked against — shared verbatim
+# with the first-boot owner setup that finishes a deferred install. build-iso.sh
+# vendors it out of the runtime package this ISO bundles, so the two can never
+# offer different layouts or accept different usernames. On the ISO that vendored copy is what
 # loads; a dry run outside the ISO falls back to the omarchy checkout
 # bin/omarchy-iso-configurator already points OMARCHY_PATH at.
 SETUP_FORM="${SETUP_FORM:-/usr/share/omarchy-iso/setup-form.sh}"
@@ -23,6 +23,14 @@ if [[ ! -r $SETUP_FORM ]]; then
   exit 1
 fi
 source "$SETUP_FORM"
+
+# Every screen speaks the language picked on the first one. omarchy-i18n reads
+# the language from OMARCHY_LANGUAGE_FILE, which the setup form's language
+# prompt points at its own choice (English for a language the console font
+# can't draw). Until then it is English: the greeter runs before anyone picks,
+# and a dry run shouldn't borrow the developer's own desktop language.
+export OMARCHY_LANGUAGE_FILE=/dev/null
+i18n() { "$OMARCHY_PATH/bin/omarchy-i18n" "$@"; }
 
 # Partition creation helpers, shared with test/partition-numbering-test.sh so
 # the numbering logic can be exercised without a real disk.
@@ -95,7 +103,7 @@ clear_logo() {
   gum style --foreground 2 --padding "1 0 0 $PADDING_LEFT" "$(<"$LOGO_PATH")"
 }
 
-# Vertically-centered welcome shown once before the keyboard step — the same
+# Vertically-centered welcome shown once before the language step — the same
 # frame the deferred-provisioning first boot opens on, so install and first boot
 # bookend the setup identically. Logo, the Omarchy tagline, and a single button,
 # centered like the boot logo. No animation.
@@ -122,11 +130,11 @@ greeter() {
   printf '\033[%d;1H' "$logo_row"
   gum style --foreground 2 --padding "0 0 0 $PADDING_LEFT" "$(<"$LOGO_PATH")"
 
-  tagline="Beautiful, Fun & Agentic Linux by DHH"
+  tagline=$(i18n installer.greeterTagline)
   tpad=$(((cols - ${#tagline}) / 2)); (( tpad < 0 )) && tpad=0
   printf '\033[%d;%dH%s' "$tagline_row" "$((tpad + 1))" "$tagline"
 
-  hint="Press Return to Start Install"
+  hint=$(i18n installer.greeterStart)
   hpad=$(((cols - ${#hint}) / 2)); (( hpad < 0 )) && hpad=0
   printf '\033[%d;%dH\033[2m%s\033[0m' "$hint_row" "$((hpad + 1))" "$hint"
 
@@ -176,9 +184,9 @@ greeter() {
 }
 
 abort() {
-  gum style "${1:-Aborted installation}"
+  gum style "${1:-$(i18n installer.aborted)}"
   echo
-  gum style "You can retry later by running: ./.automated_script.sh"
+  gum style "$(i18n installer.retryHint ./.automated_script.sh)"
   exit 1
 }
 
@@ -201,25 +209,45 @@ notice() {
   echo
 }
 
-# STEP 1: KEYBOARD LAYOUT
+# STEP 1: LANGUAGE, THEN KEYBOARD LAYOUT
 
 keyboard_form() {
-  # Ctrl+C is the hidden entry into deferred provisioning, offered on every
-  # visit: the user step unwinds back here and nothing is on disk yet. Callers
-  # re-check defer_provisioning after this returns.
-  local status
+  # Language first, then the keyboard, on the same screen: the keyboard picker
+  # preselects the layout that fits the language, and every later screen
+  # (this one included, once redrawn) speaks it. Ctrl+C is the hidden entry
+  # into deferred provisioning, offered on every visit and from either prompt:
+  # the user step unwinds back here and nothing is on disk yet. Callers re-check
+  # defer_provisioning after this returns.
+  local status stage=language previous_language
 
   while true; do
     clear_logo
     echo
-    say "Let's setup your machine..."
-    say --foreground 8 "Press Ctrl+C to prepare this machine for another owner."
+    say "$(i18n installer.setupMachine)"
+    say --foreground 8 "$(i18n installer.prepareForAnotherOwnerHint)"
     echo
 
-    omarchy_prompt_keyboard && status=0 || status=$?
-    ((status == 0)) && break
+    if [[ $stage == "language" ]]; then
+      previous_language=$language
+      omarchy_prompt_language && status=0 || status=$?
+      if ((status == 0)); then
+        # A different language brings its own keyboard default, so forget a
+        # layout picked for the previous one.
+        [[ $language == "$previous_language" ]] || keyboard_label=""
+        stage=keyboard
+        continue
+      fi
+    else
+      omarchy_prompt_keyboard && status=0 || status=$?
+      ((status == 0)) && break
+      # Esc on the keyboard goes back to the language.
+      if ((status == OMARCHY_FORM_BACK)); then
+        stage=language
+        continue
+      fi
+    fi
 
-    # Esc means "back", and nothing precedes the first screen, so re-ask.
+    # Esc means "back", and nothing precedes the first prompt, so re-ask.
     ((status == OMARCHY_FORM_BACK)) && continue
 
     if ((status == OMARCHY_FORM_SIGNAL)); then
@@ -227,7 +255,7 @@ keyboard_form() {
         defer_provisioning=true
         return 0
       fi
-      continue # declined: back to the keyboard picker
+      continue # declined: back to the prompt Ctrl+C was pressed on
     fi
     abort
   done
@@ -245,11 +273,12 @@ keyboard_form() {
 confirm_prepare_for_another_owner() {
   clear_logo
   echo
-  say "This prepares the machine for another owner."
-  say --foreground 8 "The system installs now, but setup is delayed until first boot."
+  say "$(i18n installer.prepareForAnotherOwnerBody)"
+  say --foreground 8 "$(i18n installer.prepareForAnotherOwnerDelay)"
   echo
-  gum confirm --affirmative "Yes, prepare for another owner" --negative "No, keep setting up" \
-    "Prepare this machine for another owner?"
+  gum confirm --affirmative "$(i18n installer.prepareForAnotherOwnerYes)" \
+    --negative "$(i18n installer.prepareForAnotherOwnerNo)" \
+    "$(i18n installer.prepareForAnotherOwnerConfirm)"
 }
 
 # The user step. Deferred-provisioning installs skip it entirely — the machine's first owner
@@ -257,7 +286,7 @@ confirm_prepare_for_another_owner() {
 # operator sets nothing user-specific.
 
 user_form() {
-  step "Let's setup your user account..."
+  step "$(i18n installer.setupUser)"
 
   # Each prompt reports 0 (set), OMARCHY_FORM_BACK (Esc), or OMARCHY_FORM_SIGNAL
   # (Ctrl+C). Both non-zero cases unwind to user_step, which decides what they
@@ -271,6 +300,26 @@ user_form() {
   omarchy_prompt_identity || return $?
   omarchy_prompt_hostname || return $?
   omarchy_prompt_timezone || return $?
+}
+
+# The answers for review before anything is written. Tab-separated: a
+# translated label, a name, or an email address may carry a comma, and plain
+# printf rather than echo -e so a backslash in one stays literal. Add manual
+# padding at the call site since gum table -p doesn't respect padding.
+summary_table() {
+  local skipped
+  skipped=$(i18n installer.skipped)
+  {
+    printf '%s\t%s\n' "$(i18n installer.summaryField)" "$(i18n installer.summaryValue)"
+    printf '%s\t%s\n' "$(i18n installer.summaryLanguage)" "$(omarchy_language_label "$language")"
+    printf '%s\t%s\n' "$(i18n installer.summaryKeyboard)" "${keyboard_label:-$keyboard}"
+    printf '%s\t%s\n' "$(i18n installer.summaryUsername)" "$username"
+    printf '%s\t%s\n' "$(i18n installer.summaryPassword)" "$(printf "%${#password}s" | tr ' ' '*')"
+    printf '%s\t%s\n' "$(i18n installer.summaryFullName)" "${full_name:-$skipped}"
+    printf '%s\t%s\n' "$(i18n installer.summaryEmail)" "${email_address:-$skipped}"
+    printf '%s\t%s\n' "$(i18n installer.summaryHostname)" "$hostname"
+    printf '%s\t%s\n' "$(i18n installer.summaryTimezone)" "$timezone"
+  } | gum table -s $'\t' -p
 }
 
 # Returns 0 on confirmed account details, or as soon as the keyboard screen
@@ -290,19 +339,11 @@ user_step() {
       continue
     fi
 
-    # Add manual padding since gum table -p doesn't respect padding
-    echo -e "Field,Value
-Username,$username
-Password,$(printf "%${#password}s" | tr ' ' '*')
-Full name,${full_name:-[Skipped]}
-Email address,${email_address:-[Skipped]}
-Hostname,$hostname
-Timezone,$timezone
-Keyboard,$keyboard" |
-      gum table -s "," -p | sed "s/^/${PADDING_LEFT_SPACES}/"
+    summary_table | sed "s/^/${PADDING_LEFT_SPACES}/"
 
     echo
-    if gum confirm --negative "No, change it" "Does this look right?"; then
+    if gum confirm --affirmative "$(i18n installer.yes)" --negative "$(i18n installer.changeIt)" \
+      "$(i18n installer.summaryConfirm)"; then
       break
     else
       keyboard_form
@@ -406,8 +447,9 @@ detect_windows_esp() {
   return 1
 }
 
+# Shown on screen, so the decimal separator follows the installer's language.
 to_gb() {
-  awk -v bytes="$1" 'BEGIN {printf "%.1fGB", bytes/1024/1024/1024}'
+  printf '%sGB' "$(i18n --number "$(awk -v bytes="$1" 'BEGIN {printf "%.1f", bytes/1024/1024/1024}')")"
 }
 
 # T2 Macs need their own kernel for keyboard/wifi drivers.
@@ -423,7 +465,9 @@ detect_kernel() {
 # every caller here aborts on it.
 
 # disk_step and create_partition fail through this rather than abort() so a
-# half-built layout is undone before the user is handed back their disk.
+# half-built layout is undone before the user is handed back their disk. Their
+# messages name the device and the step that broke for the install log and a
+# support request, so they stay English; abort's own lines are translated.
 disk_abort_hook() {
   # Release the target before reclaiming its partitions: a mounted filesystem
   # or an open LUKS mapping would keep parted from removing them.
@@ -440,6 +484,7 @@ disk_abort_hook() {
 # Deferred-provisioning installs defer the user to first boot: no credentials, and on encrypted
 # targets the orchestrator generates a throwaway LUKS passphrase itself.
 write_user_files() {
+  write_installer_language
   echo "$full_name" >user_full_name.txt
   echo "$email_address" >user_email_address.txt
   printf '%s\n' "$encrypt_installation" >user_encrypt_installation.txt
@@ -479,6 +524,18 @@ $credentials_encryption_line
 _EOF_
 }
 
+# The install dashboard runs after this process exits, so it can't inherit the
+# OMARCHY_LANGUAGE_FILE the language prompt exported. Leave it the language
+# these screens spoke (English for one the console can't draw), and
+# .automated_script.sh points the dashboard at it.
+write_installer_language() {
+  if [[ -f $OMARCHY_LANGUAGE_FILE ]]; then
+    head -n 1 "$OMARCHY_LANGUAGE_FILE" >installer_language
+  else
+    echo en >installer_language
+  fi
+}
+
 # Show what a dry run would have written, then leave no trace behind.
 print_dry_run_files() {
   echo -e "User Configuration:"
@@ -496,7 +553,10 @@ print_dry_run_files() {
   echo -e "\nDisk Encryption:"
   cat user_encrypt_installation.txt
 
-  rm -f user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt user_encrypt_installation.txt
+  echo -e "\nInstaller Language:"
+  cat installer_language
+
+  rm -f user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt user_encrypt_installation.txt installer_language
 }
 
 # Shared error screen for every "can't fit Omarchy here" outcome of the
@@ -504,11 +564,12 @@ print_dry_run_files() {
 # action so users have a way to actually fix the situation.
 not_enough_space() {
   local available="${1:-0}"
-  step "Not enough free space on $disk"
-  say --foreground 1 "$disk has $(to_gb $available) of usable free space; Omarchy needs at least 32GB."
-  say "Open the partition tool to free at least 32GB on $disk, then try again."
+  step "$(i18n installer.notEnoughSpace "$disk")"
+  say --foreground 1 "$(i18n installer.notEnoughSpaceBody "$disk" "$(to_gb "$available")")"
+  say "$(i18n installer.notEnoughSpaceHint "$disk")"
   echo
-  if ! gum confirm --affirmative "Back" --negative "Open partition tool" "Return to installation mode?"; then
+  if ! gum confirm --affirmative "$(i18n installer.back)" --negative "$(i18n installer.openPartitionTool)" \
+    "$(i18n installer.returnToInstallMode)"; then
     open_partition_tool
   fi
   return 1
@@ -518,14 +579,14 @@ not_enough_space() {
 # encryption confirm. Sets the globals run_partition_execute needs. Returns 1
 # to fall back to the install-mode picker.
 run_partition_decide() {
-  step "Checking for BitLocker on $disk"
+  step "$(i18n installer.checkingBitlocker "$disk")"
   local bl_part
   bl_part=$(detect_bitlocker || true)
   if [[ -n "$bl_part" ]]; then
-    say --foreground 1 "BitLocker signature detected on $bl_part."
-    say "Turn BitLocker off in Windows and wait for the drive to finish decrypting, then try again."
-    say "Suspending BitLocker is not enough — the drive stays encrypted."
-    abort "Aborted: BitLocker is enabled on this disk."
+    say --foreground 1 "$(i18n installer.bitlockerDetected "$bl_part")"
+    say "$(i18n installer.bitlockerTurnOff)"
+    say "$(i18n installer.bitlockerSuspend)"
+    abort "$(i18n installer.bitlockerAborted)"
   fi
 
   # Omarchy always creates its own dedicated ESP in free space and never
@@ -534,17 +595,17 @@ run_partition_decide() {
   # Windows ESP is far too small for our Unified Kernel Images, and a shared
   # ESP forces the install unencrypted. A separate Linux ESP keeps Windows
   # and Omarchy fully isolated and keeps LUKS on the table.
-  step "Checking existing EFI partitions on $disk"
+  step "$(i18n installer.checkingEfi "$disk")"
   local detected_win_esp
   detected_win_esp=$(detect_windows_esp || true)
   if [[ -n "$detected_win_esp" ]]; then
-    say "Found a Windows ESP at $detected_win_esp — leaving it untouched."
-    say "Omarchy will create its own dedicated EFI partition in free space."
+    say "$(i18n installer.windowsEspFound "$detected_win_esp")"
+    say "$(i18n installer.ownEfiPartition)"
   else
-    say "A new EFI partition will be created in free space."
+    say "$(i18n installer.newEfiPartition)"
   fi
 
-  step "Analyzing free space on $disk"
+  step "$(i18n installer.analyzingFreeSpace "$disk")"
   partprobe "$disk" 2>/dev/null || true
   sleep 1
 
@@ -619,21 +680,21 @@ run_partition_decide() {
   while true; do
     clear_logo
     echo
-    say "Install Omarchy in the $(to_gb $INSTALL_MAX_B) of free space."
+    say "$(i18n installer.installInFreeSpace "$(to_gb "$INSTALL_MAX_B")")"
 
     case $mode in
       encrypted)
-        say --foreground 8 "Press Ctrl+C for unencrypted install."
-        affirmative="Yes, install"
+        say --foreground 8 "$(i18n installer.unencryptedHint)"
+        affirmative=$(i18n installer.yesInstall)
         ;;
       unencrypted)
-        affirmative="Yes, install without encryption"
+        affirmative=$(i18n installer.yesInstallUnencrypted)
         ;;
     esac
     echo
 
-    gum confirm --affirmative "$affirmative" --negative "No, change it" \
-      "Confirm installing on $disk"
+    gum confirm --affirmative "$affirmative" --negative "$(i18n installer.changeIt)" \
+      "$(i18n installer.confirmInstallOn "$disk")"
     confirm_status=$?
 
     case $confirm_status in
@@ -691,7 +752,7 @@ run_partition_execute() {
     say "[dry] partition numbers are assigned by parted at creation, then read back"
     say "[dry] encrypted=$encrypt_installation kernel=$kernel_choice"
   else
-    step "Creating partitions on $disk"
+    step "$(i18n installer.creatingPartitions "$disk")"
     if $needs_mklabel; then
       disk_step "initializing GPT on $disk" parted --script "$disk" mklabel gpt
       partprobe "$disk" 2>/dev/null || true
@@ -729,7 +790,7 @@ run_partition_execute() {
     disk_step "clearing stale signatures on $root_partition_device" wipefs -af "$root_partition_device"
 
     if [[ "$encrypt_installation" == "true" ]]; then
-      step "Setting up LUKS2 on $root_partition_device"
+      step "$(i18n installer.settingUpEncryption "$root_partition_device")"
       # Kept as pipes rather than routed through disk_step: the passphrase must
       # not become an argv the process table can show. Folding stderr into
       # stdout still lands any error in the install log.
@@ -746,7 +807,7 @@ run_partition_execute() {
       root_mapper="$root_partition_device"
     fi
 
-    step "Creating Btrfs filesystem and subvolumes"
+    step "$(i18n installer.creatingFilesystem)"
     disk_step "creating the Btrfs filesystem on $root_mapper" \
       mkfs.btrfs -f -L OMARCHY "$root_mapper"
     wait_for_device "$root_mapper" || disk_abort_hook "Root device $root_mapper never appeared"
@@ -802,6 +863,7 @@ run_partition_execute() {
     "omarchy_install": {
         "input_method": "${keyboard_input_method:-none}",
         "input_xkb_layout": "${keyboard_xkb_layout:-}",
+        "language": "${language:-en}",
         "mode": "protected",
         "target_mount": "/mnt",
         "boot": {
@@ -834,7 +896,7 @@ run_partition_execute() {
     "locale_config": {
         "kb_layout": "$keyboard",
         "sys_enc": "UTF-8",
-        "sys_lang": "en_US.UTF-8"
+        "sys_lang": "${language_locale:-en_US.UTF-8}"
     },
     "mirror_config": {
         "custom_repositories": [],
@@ -864,7 +926,7 @@ _EOF_
 }
 
 disk_form() {
-  step "Let's select where to install Omarchy..."
+  step "$(i18n installer.selectWhere)"
 
   # Don't offer the install media as an option (Arch ISO mounts it here)
   local boot_source
@@ -890,19 +952,20 @@ disk_form() {
     fi
   done <<<"$available_disks"
 
-  selected_display=$(echo "$disk_options" | gum choose --header "Select install disk") || abort
+  selected_display=$(echo "$disk_options" | gum choose --header "$(i18n installer.selectDisk)") || abort
   disk=$(echo "$selected_display" | awk '{print $1}')
 }
 
 # STEP 4: INSTALL MODE
 
 open_partition_tool() {
-  step "Partition tool for $disk"
-  gum style "Create unallocated free space for Omarchy, then write changes and quit."
-  gum style --foreground 8 "Do not create an Omarchy partition here — leave the target area as Free space."
-  gum style --foreground 8 "Tip: free-space install needs at least 32GB unallocated, plus 2GB more if no ESP already exists."
+  step "$(i18n installer.partitionToolFor "$disk")"
+  gum style "$(i18n installer.partitionToolBody)"
+  gum style --foreground 8 "$(i18n installer.partitionToolWarning)"
+  gum style --foreground 8 "$(i18n installer.partitionToolTip)"
   echo
-  gum confirm --affirmative "Open cfdisk" --negative "Back" "Open partition tool for $disk?" || return 0
+  gum confirm --affirmative "$(i18n installer.openCfdisk)" --negative "$(i18n installer.back)" \
+    "$(i18n installer.openPartitionToolFor "$disk")" || return 0
 
   clear
   cfdisk "$disk" || true
@@ -934,18 +997,31 @@ requires_full_disk_install() {
   [[ -z "$free_space_b" || "$free_space_b" -eq 0 ]]
 }
 
+# Sets install_mode to full_disk, free_space or other_disk. The choices are
+# shown translated, so the answer is mapped back rather than compared as text.
 install_mode_form() {
-  local choices=("Full disk install")
+  local full_disk free_space other_disk choice
+  full_disk=$(i18n installer.fullDiskInstall)
+  free_space=$(i18n installer.freeSpaceInstall)
+  other_disk=$(i18n installer.chooseDifferentDisk)
+
+  local choices=("$full_disk")
 
   # The free-space/protected path registers an EFI boot entry and is UEFI-only.
   # Full-disk installs still support BIOS through the orchestrator's BIOS branch.
   if [[ -d /sys/firmware/efi ]] && ! $full_disk_only; then
-    choices+=("Free space install (alongside existing data)")
+    choices+=("$free_space")
   fi
-  choices+=("Choose a different disk")
+  choices+=("$other_disk")
 
-  step "Let's select how to install Omarchy..."
-  install_mode=$(gum choose --header "Select installation mode on $disk" "${choices[@]}") || abort
+  step "$(i18n installer.selectHow)"
+  choice=$(gum choose --header "$(i18n installer.selectInstallMode "$disk")" "${choices[@]}") || abort
+
+  case $choice in
+    "$full_disk") install_mode="full_disk" ;;
+    "$free_space") install_mode="free_space" ;;
+    *) install_mode="other_disk" ;;
+  esac
 }
 
 confirm_disk_overwrite() {
@@ -955,17 +1031,18 @@ confirm_disk_overwrite() {
   while true; do
     clear_logo
     echo
-    say "Everything will be overwritten. There is no recovery possible."
+    say "$(i18n installer.overwriteWarning)"
 
     if [[ $mode == "encrypted" ]]; then
-      say --foreground 8 "Press Ctrl+C for unencrypted install."
-      affirmative="Yes, install"
+      say --foreground 8 "$(i18n installer.unencryptedHint)"
+      affirmative=$(i18n installer.yesInstall)
     else
-      affirmative="Yes, install without encryption"
+      affirmative=$(i18n installer.yesInstallUnencrypted)
     fi
 
     echo
-    gum confirm --affirmative "$affirmative" --negative "No, change it" "Confirm overwriting ${disk}"
+    gum confirm --affirmative "$affirmative" --negative "$(i18n installer.changeIt)" \
+      "$(i18n installer.confirmOverwrite "$disk")"
     confirm_status=$?
 
     case $confirm_status in
@@ -1004,13 +1081,13 @@ select_installation() {
     # With no free-space option to offer, a full-disk install is the only
     # mode, so skip the picker and go straight to the overwrite confirm.
     if $full_disk_only; then
-      install_mode="Full disk install"
+      install_mode="full_disk"
     else
       install_mode_form
     fi
 
     case "$install_mode" in
-      "Full disk install")
+      full_disk)
         if confirm_disk_overwrite; then
           install_target="full_disk"
           return 0
@@ -1019,107 +1096,50 @@ select_installation() {
         # wants a different disk.
         $full_disk_only && disk_form
         ;;
-      "Free space install"*)
+      free_space)
         if run_partition_decide; then
           install_target="free_space"
           return 0
         fi
         ;;
-      "Choose a different disk")
+      other_disk)
         disk_form
         ;;
     esac
   done
 }
 
-# STEP 1: KEYBOARD (Ctrl+C here arms deferred provisioning and jumps to disk selection)
+# The full-disk archinstall configuration: archinstall partitions, formats and
+# (optionally) encrypts $disk itself from this layout.
+write_full_disk_configuration() {
+  local disk_size mib gib disk_size_in_mib gpt_backup_reserve boot_partition_start
+  local boot_partition_size main_partition_start main_partition_size
+  local encryption_password_line disk_encryption_config
 
-defer_provisioning=false
-install_target="full_disk"
+  disk_size=$(lsblk -bdno SIZE "$disk")
+  mib=$((1024 * 1024))
+  gib=$((mib * 1024))
+  disk_size_in_mib=$((disk_size / mib * mib)) # Rounds to nearest MiB
 
-# Let the live VT reach its settled width before the first screen so the logo
-# isn't measured against the transient 80-column boot console.
-wait_for_stable_terminal
+  gpt_backup_reserve=$((mib))
+  boot_partition_start=$((mib))
+  boot_partition_size=$((2 * gib))
 
-greeter
+  main_partition_start=$((boot_partition_size + boot_partition_start))
+  main_partition_size=$((disk_size_in_mib - main_partition_start - gpt_backup_reserve))
 
-keyboard_form
+  kernel_choice=$(detect_kernel)
 
-# Normal install: keyboard (loaded above, so the LUKS passphrase is typed under
-# the right layout) → user → disk → install mode. The user step can unwind to
-# the keyboard screen and arm deferral there, hence the second check.
-if ! $defer_provisioning; then
-  user_step
-fi
-
-if $defer_provisioning; then
-  # Deferred provisioning: no user setup, and the keyboard is deferred to the machine's first
-  # boot. A defined default keymap so it boots before then; the owner picks
-  # their real layout in the OOBE, which re-keys the console and, on encrypted
-  # installs, rebuilds the initramfs so the LUKS prompt matches.
-  keyboard="us"
-  keyboard_input_method="none"
-  keyboard_xkb_layout=""
-  username=""
-  password=""
-  password_hash=""
-  full_name=""
-  email_address=""
-  # Neutral defaults for the install; the owner overwrites both in the
-  # first-boot OOBE (omarchy-provision-owner).
-  hostname="omarchy"
-  timezone="UTC"
-
-  # Jump straight to disk selection + overwrite confirmation (encrypted by
-  # default, Ctrl+C toggles unencrypted). deferred provisioning is always a full-disk install.
-  disk_form
-  until confirm_disk_overwrite; do
-    disk_form
-  done
-  install_target="full_disk"
-else
-  disk_form
-  select_installation
-fi
-
-clear
-
-write_user_files
-
-if [[ $install_target == "free_space" ]]; then
-  run_partition_execute "$@"
-
-  if [[ ${1:-} == "dry" ]]; then
-    print_dry_run_files
-  fi
-  exit 0
-fi
-
-# Setup partition layout
-disk_size=$(lsblk -bdno SIZE "$disk")
-mib=$((1024 * 1024))
-gib=$((mib * 1024))
-disk_size_in_mib=$((disk_size / mib * mib)) # Rounds to nearest MiB
-
-gpt_backup_reserve=$((mib))
-boot_partition_start=$((mib))
-boot_partition_size=$((2 * gib))
-
-main_partition_start=$((boot_partition_size + boot_partition_start))
-main_partition_size=$((disk_size_in_mib - main_partition_start - gpt_backup_reserve))
-
-kernel_choice=$(detect_kernel)
-
-if [[ $encrypt_installation == true ]]; then
-  # Deferred-provisioning installs carry no password: the orchestrator generates a throwaway
-  # LUKS passphrase and stages it for the first-boot re-key.
-  if $defer_provisioning; then
-    encryption_password_line=""
-  else
-    encryption_password_line=",
+  if [[ $encrypt_installation == true ]]; then
+    # Deferred-provisioning installs carry no password: the orchestrator generates a throwaway
+    # LUKS passphrase and stages it for the first-boot re-key.
+    if $defer_provisioning; then
+      encryption_password_line=""
+    else
+      encryption_password_line=",
             \"encryption_password\": $(echo -n "$password" | jq -Rsa)"
-  fi
-  disk_encryption_config=$(cat <<-_EOF_
+    fi
+    disk_encryption_config=$(cat <<-_EOF_
 ,
         "disk_encryption": {
             "encryption_type": "luks",
@@ -1128,12 +1148,12 @@ if [[ $encrypt_installation == true ]]; then
             "partitions": [ "8c2c2b92-1070-455d-b76a-56263bab24aa" ]$encryption_password_line
         }
 _EOF_
-)
-else
-  disk_encryption_config=""
-fi
+    )
+  else
+    disk_encryption_config=""
+  fi
 
-cat <<-_EOF_ >user_configuration.json
+  cat <<-_EOF_ >user_configuration.json
 {
     "app_config": null,
     "archinstall-language": "English",
@@ -1144,6 +1164,7 @@ cat <<-_EOF_ >user_configuration.json
     "omarchy_install": {
         "input_method": "${keyboard_input_method:-none}",
         "input_xkb_layout": "${keyboard_xkb_layout:-}",
+        "language": "${language:-en}",
         "mode": "full_disk",
         "defer_provisioning": $defer_provisioning,
         "target_mount": "/mnt",
@@ -1227,7 +1248,7 @@ cat <<-_EOF_ >user_configuration.json
     "locale_config": {
         "kb_layout": "$keyboard",
         "sys_enc": "UTF-8",
-        "sys_lang": "en_US.UTF-8"
+        "sys_lang": "${language_locale:-en_US.UTF-8}"
     },
     "mirror_config": {
         "custom_repositories": [],
@@ -1254,7 +1275,89 @@ cat <<-_EOF_ >user_configuration.json
     "version": "3.0.9"
 }
 _EOF_
+}
 
-if [[ $1 == "dry" ]]; then
-  print_dry_run_files
+main() {
+  # STEP 1: LANGUAGE AND KEYBOARD (Ctrl+C here arms deferred provisioning and jumps to disk selection)
+
+  defer_provisioning=false
+  install_target="full_disk"
+
+  # Let the live VT reach its settled width before the first screen so the logo
+  # isn't measured against the transient 80-column boot console.
+  wait_for_stable_terminal
+
+  # Load Terminus before the first screen: the kernel's default console font
+  # can't draw most of the languages offered (not even "ø"). It picks its size
+  # by measuring the console, hence after the console has settled. A no-op
+  # outside a real VT, so dry runs in a terminal emulator are untouched.
+  omarchy_console_font
+
+  greeter
+
+  keyboard_form
+
+  # Normal install: language and keyboard (loaded above, so the LUKS passphrase
+  # is typed under the right layout) → user → disk → install mode. The user step can unwind to
+  # the keyboard screen and arm deferral there, hence the second check.
+  if ! $defer_provisioning; then
+    user_step
+  fi
+
+  if $defer_provisioning; then
+    # Deferred provisioning: no user setup, and the keyboard is deferred to the machine's first
+    # boot. A defined default keymap so it boots before then; the owner picks
+    # their real layout in the OOBE, which re-keys the console and, on encrypted
+    # installs, rebuilds the initramfs so the LUKS prompt matches.
+    keyboard="us"
+    keyboard_input_method="none"
+    keyboard_xkb_layout=""
+    username=""
+    password=""
+    password_hash=""
+    full_name=""
+    email_address=""
+    # Neutral defaults for the install; the owner overwrites them in the
+    # first-boot OOBE (omarchy-provision-owner), which asks the language too. The
+    # operator's language keeps speaking on the screens that remain here.
+    hostname="omarchy"
+    timezone="UTC"
+    language="en"
+    language_locale="en_US.UTF-8"
+
+    # Jump straight to disk selection + overwrite confirmation (encrypted by
+    # default, Ctrl+C toggles unencrypted). deferred provisioning is always a full-disk install.
+    disk_form
+    until confirm_disk_overwrite; do
+      disk_form
+    done
+    install_target="full_disk"
+  else
+    disk_form
+    select_installation
+  fi
+
+  clear
+
+  write_user_files
+
+  if [[ $install_target == "free_space" ]]; then
+    run_partition_execute "$@"
+
+    if [[ ${1:-} == "dry" ]]; then
+      print_dry_run_files
+    fi
+    exit 0
+  fi
+
+  write_full_disk_configuration
+
+  if [[ ${1:-} == "dry" ]]; then
+    print_dry_run_files
+  fi
+}
+
+# Run when executed; a test sources it for its functions alone.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
 fi

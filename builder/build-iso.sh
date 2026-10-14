@@ -133,8 +133,10 @@ cp "/tmp/$NODE_FILENAME" "$build_cache_dir/airootfs/opt/packages/"
 # Packages installed into the live ISO environment itself (NOT the target system).
 # The selected omarchy-settings package is needed here so its post_install hook
 # drops Omarchy's plymouthd.conf into /etc/plymouth before mkarchiso builds the
-# live initramfs.
-arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
+# live initramfs. terminus-font is the console font the configurator loads
+# (omarchy_console_font) so the languages it offers can be drawn at all: the
+# kernel's default font can't even draw "ø".
+arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate terminus-font omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
 printf '%s\n' "${arch_packages[@]}" >> "$build_cache_dir/packages.x86_64"
 
 # The live ISO boots linux-t2 (see airootfs/etc/mkinitcpio.d/linux-t2.preset), so
@@ -157,6 +159,7 @@ sed -i -E '/^(linux|broadcom-wl)$/d' "$build_cache_dir/packages.x86_64"
 if [[ -d /omarchy-source ]]; then
   base_pkg_lists=(/omarchy-source/install/omarchy-base.packages /omarchy-source/install/omarchy-other.packages)
   setup_form=/omarchy-source/install/provisioning/setup-form.sh
+  i18n_command=/omarchy-source/bin/omarchy-i18n
 else
   # Pull the same package lists out of the freshly-downloaded Omarchy runtime
   # package so we don't need a local checkout in the non-local-source path.
@@ -178,6 +181,8 @@ else
   # actionable error below.
   bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/install/provisioning/setup-form.sh 2>/dev/null || true
   setup_form=/tmp/omarchy-pkglists/usr/share/omarchy/install/provisioning/setup-form.sh
+  bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/bin/omarchy-i18n 2>/dev/null || true
+  i18n_command=/tmp/omarchy-pkglists/usr/share/omarchy/bin/omarchy-i18n
 fi
 
 mkdir -p "$build_cache_dir/airootfs/usr/share/omarchy-iso"
@@ -202,6 +207,22 @@ if [[ ! -f $setup_form ]]; then
   exit 1
 fi
 cp "$setup_form" "$build_cache_dir/airootfs/usr/share/omarchy-iso/setup-form.sh"
+
+# The configurator, the setup form and the install dashboard print every screen
+# through omarchy-i18n. The live ISO carries omarchy-settings (and with it the
+# catalogs under /usr/share/omarchy/default/i18n) but not the runtime, which
+# owns bin/, so vendor the one command into the place OMARCHY_PATH says.
+if [[ ! -f $i18n_command ]]; then
+  if [[ -d /omarchy-source ]]; then
+    echo "ERROR: the --local-source checkout ships no bin/omarchy-i18n" >&2
+  else
+    echo "ERROR: $OMARCHY_RUNTIME_PACKAGE does not ship bin/omarchy-i18n" >&2
+  fi
+  echo "       The installer prints every screen through it, so this ISO would" >&2
+  echo "       boot into an installer with nothing to say." >&2
+  exit 1
+fi
+install -Dm755 "$i18n_command" "$build_cache_dir/airootfs/usr/share/omarchy/bin/omarchy-i18n"
 
 # Collect every package we want available in the offline mirror.
 declare -a all_packages

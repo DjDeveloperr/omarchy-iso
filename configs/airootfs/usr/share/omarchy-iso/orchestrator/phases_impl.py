@@ -36,6 +36,7 @@ from . import archinstall_adapter as arch
 from .command import capture, capture_identifier, require_text
 from .context import InstallContext
 from .keyboard import configure_keyboard
+from .language import configure_language
 from .ui import error, info
 
 
@@ -276,6 +277,10 @@ def arch_install_system(ctx: InstallContext) -> None:
                 ctx.omarchy_install.get("input_xkb_layout", ""),
             ):
                 error(f"Invalid keyboard language specified: {kb_layout}")
+
+            # Before user creation: the user setup applies it to the
+            # installing user, and the first-boot owner setup preselects it.
+            configure_language(installer.target, ctx.omarchy_install.get("language") or "en")
 
             if config.mirror_config:
                 installer.set_mirrors(mirror_handler, config.mirror_config, on_target=True)

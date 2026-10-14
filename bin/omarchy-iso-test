@@ -660,9 +660,15 @@ drive_configurator() {
   capture_console "success-installer-00-greeter"
   press ret
 
-  # Keyboard is the first screen. Ctrl+C there is the hidden entry into deferred provisioning
+  # Language, then keyboard, share the first screen. English is preselected
+  # and keeps the keyboard default at English (US).
+  wait_for_screen "language" 300
+  capture_console "success-installer-01-language"
+  press ret
+
+  # Ctrl+C on the keyboard prompt is the hidden entry into deferred provisioning
   # mode; a normal install just selects the layout.
-  wait_for_screen "keyboard layout" 300
+  wait_for_screen "keyboard layout" 60
   capture_console "success-installer-01-keyboard-layout"
 
   if $PROVISION; then
@@ -789,7 +795,12 @@ drive_provision_owner() {
   capture_console "success-provision-00-greeter"
   press ret
 
-  wait_for_screen "keyboard layout" 120
+  # The owner picks the language first; English keeps English (US) preselected.
+  wait_for_screen "language" 120
+  capture_console "success-provision-01-language"
+  press ret
+
+  wait_for_screen "keyboard layout" 60
   if [[ $KEYBOARD_LABEL == "English (US)" ]]; then
     press down # preserve the harness's default UK provisioning coverage
   else

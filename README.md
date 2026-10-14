@@ -157,7 +157,7 @@ These are the configurator's own output files, so the way to get a starting set 
 
 | File | Required | Purpose |
 |------|----------|---------|
-| `user_configuration.json` | Yes | archinstall config: disk, hostname, timezone, keyboard |
+| `user_configuration.json` | Yes | archinstall config: disk, hostname, timezone, keyboard, and language: `omarchy_install.language` is an Omarchy language code such as `da` (English when absent), and `locale_config.sys_lang` its locale |
 | `user_credentials.json` | Yes | Username and password hash |
 | `user_full_name.txt` | No | Git full name |
 | `user_email_address.txt` | No | Git email |
