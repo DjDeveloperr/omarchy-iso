@@ -10,11 +10,12 @@
 # AAVMF/edk2 firmware. evidence_dir gets serial.log, screen.png and timing.
 #
 # Env: TIMEOUT (seconds to wait for the login prompt, default 600), SMP (4),
-#      MEM (8G), MACHINE. The default machine is the one that works under
-#      nested KVM on Namespace's Apple-backed runners: with the interrupt
-#      translation service on, MSIs are lost and virtio disks hang.
+#      MEM (8G), MACHINE. The default machine takes MSIs through a GICv2m,
+#      not an ITS: nested on Apple silicon (Namespace's Apple-backed
+#      runners) the host's virtual GIC has no LPIs, so the LPIs an ITS
+#      raises never arrive and the guest's virtio and USB devices hang.
 set -euo pipefail
-[[ $# -eq 2 ]] || { sed -n '2,16p' "$0" >&2; exit 2; }
+[[ $# -eq 2 ]] || { sed -n '2,17p' "$0" >&2; exit 2; }
 iso=$(realpath "$1")
 out=$(realpath -m "$2")
 mkdir -p "$out"
@@ -56,7 +57,7 @@ PY
 }
 
 start=$(date +%s)
-qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,its=off,acpi=off}" -accel kvm -cpu host \
+qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,msi=gicv2m,acpi=off}" -accel kvm -cpu host \
   -smp "${SMP:-4}" -m "${MEM:-8G}" \
   -drive "if=pflash,format=raw,readonly=on,file=$code" -drive "if=pflash,format=raw,file=$state/vars.fd" \
   -device virtio-scsi-pci -drive "file=$iso,format=raw,if=none,id=iso,media=cdrom,readonly=on" \
