@@ -21,7 +21,8 @@ bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/n1x-dev-ssh/omarchy-n1x-dev-ssh" "$ROOT/configs/airootfs/root/.automated_script.sh"
 
 grep -Fq 'menci/archlinuxarm@sha256:' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest"
-grep -Fq -- 'an aarch64 build requires --package-dir DIR' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 build must come with its package bundle"
+grep -Eq 'requires? (--package-dir DIR|the package bundle)' "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
+  && fail "an aarch64 build still requires a package bundle, though edge publishes linux-omarchy"
 grep -Fq 'ships no $required' "$ROOT/builder/build-iso.sh" || fail "a runtime without the platform support is not refused"
 for required in bin/omarchy-hw-platform install/hardware/qualcomm/dtb-uki.sh install/omarchy-aarch64-qualcomm.packages \
   install/omarchy-aarch64-n1x.packages install/omarchy-aarch64-gb10.packages; do
@@ -143,7 +144,7 @@ make_refuses() { # expected message, then arguments
   grep -Fq -- "$want" <<<"$out" || fail "omarchy-iso-make $*: expected '$want', got: $out"
 }
 make_refuses 'builds use the edge channel' --arch aarch64
-make_refuses 'requires --package-dir DIR' --arch aarch64 --edge
+make_refuses 'package directory not found' --arch aarch64 --edge --package-dir /nonexistent
 make_refuses 'Unknown option: --kernel' --arch aarch64 --edge --kernel linux-aarch64
 make_refuses 'only valid with --arch aarch64' --package-dir /tmp
 make_refuses 'Unknown option: --platform' --arch aarch64 --platform n1x --edge

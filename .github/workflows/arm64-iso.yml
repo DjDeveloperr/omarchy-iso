@@ -1,7 +1,7 @@
 name: ARM64 ISO
 
-# Builds the aarch64 ISO on a native ARM runner, on Arch Linux ARM's kernel and
-# the published edge packages: the one image for every board that kernel runs.
+# Builds the aarch64 ISO on a native ARM runner, on linux-omarchy and the
+# published edge packages: the one image for every board that kernel runs.
 # A VM can boot it, so CI can go on to install and test it.
 #
 # The push trigger exists while this lives on a branch: a manual run needs the
@@ -79,8 +79,8 @@ jobs:
           (cd release && sha256sum "$(basename "$iso")" | tee "$(basename "$iso").sha256")
           bsdtar -tvf "$iso" >listing.txt
           # What the firmware starts, what GRUB loads and what the installer installs from.
-          for want in EFI/BOOT/BOOTAA64.EFI arch/boot/aarch64/vmlinuz-linux-aarch64 \
-            arch/boot/aarch64/initramfs-linux-aarch64.img arch/aarch64/airootfs.sfs; do
+          for want in EFI/BOOT/BOOTAA64.EFI arch/boot/aarch64/vmlinuz-linux-omarchy \
+            arch/boot/aarch64/initramfs-linux-omarchy.img arch/aarch64/airootfs.sfs; do
             grep -Eiq " $want\$" listing.txt || { echo "::error::$iso has no $want"; exit 1; }
           done
           {

@@ -33,9 +33,9 @@ while [[ $# -gt 0 ]]; do
     shift 2
     ;;
   --package-dir)
-    # aarch64 packages no repository publishes: a kernel and its headers, plus
-    # anything pinned to a version proven on the hardware. The directory must
-    # carry a SHA256SUMS covering every archive.
+    # aarch64 packages that take precedence over the repositories: a kernel
+    # under test, or anything pinned to a version proven on the hardware. The
+    # directory must carry a SHA256SUMS covering every archive.
     PACKAGE_DIR="${2:-}"
     if [[ -z $PACKAGE_DIR ]]; then
       echo "Error: --package-dir requires a directory" >&2
@@ -93,7 +93,7 @@ while [[ $# -gt 0 ]]; do
   *)
     echo "Unknown option: $1"
     echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
-    echo "       $0 --arch aarch64 --edge --package-dir DIR [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
+    echo "       $0 --arch aarch64 --edge [--package-dir DIR] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
     exit 1
     ;;
   esac
@@ -108,10 +108,8 @@ fi
 
 # Architecture selection. x86_64 is unchanged. aarch64 builds run in a pinned
 # Arch Linux ARM container against Omarchy's edge aarch64 repository, and make
-# one image for every board, on linux-omarchy. That needs the package bundle
-# that carries it, since no repository publishes that kernel yet. build-iso.sh
-# refuses a runtime without the platform support, which today means
-# --local-source against a checkout that has it.
+# one image for every board, on the linux-omarchy that repository publishes.
+# build-iso.sh refuses a runtime without the platform support.
 CONTAINER_IMAGE=ghcr.io/archlinux/archlinux:latest
 CONTAINER_PLATFORM_ARGS=()
 OMARCHY_KERNEL=linux-t2
@@ -119,10 +117,6 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   OMARCHY_KERNEL=linux-omarchy
   if [[ ${OMARCHY_MIRROR:-} != edge ]]; then
     echo "Error: --arch aarch64 builds use the edge channel, the only one Omarchy publishes for aarch64; pass --edge and drop --rc" >&2
-    exit 1
-  fi
-  if [[ -z $PACKAGE_DIR ]]; then
-    echo "Error: an aarch64 build requires --package-dir DIR; no repository publishes linux-omarchy for aarch64 yet" >&2
     exit 1
   fi
   if [[ -n $PACKAGE_DIR ]]; then
