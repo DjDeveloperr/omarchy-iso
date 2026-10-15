@@ -46,22 +46,21 @@ jobs:
         with:
           path: ~/.cache/omarchy
 
-      # The Omarchy packages are built from source, as the N1x image builds
-      # them: the published ones carry no aarch64 pacman configuration and none
-      # of the platform support the build asks for, and until omarchy#14637
-      # reaches edge their installer looks for an x64 Node tarball on every
-      # architecture. omarchy's n1x branch has all of it.
+      # The Omarchy packages are built from source, from omarchy's quattro and
+      # omarchy-pkgs' master, so the image tests the runtime it will install
+      # rather than whatever edge last published. Both carry the aarch64
+      # platform support since omarchy#14820 and omarchy-pkgs#930.
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           repository: omacom/omarchy
-          ref: n1x
+          ref: quattro
           path: src/omarchy
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           repository: omacom/omarchy-pkgs
-          ref: n1x
+          ref: master
           path: src/omarchy-pkgs
           persist-credentials: false
 
