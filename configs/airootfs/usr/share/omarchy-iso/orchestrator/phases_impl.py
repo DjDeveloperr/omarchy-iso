@@ -760,7 +760,7 @@ def _write_form_defaults(ctx: InstallContext) -> None:
     """Leave preset media's keyboard and timezone for a first-boot owner
     setup to preselect, as plain KEY=value data. No preset writes nothing."""
     defaults = ctx.omarchy_install.get("form_defaults") or {}
-    lines = [f"{key.upper()}={defaults[key]}" for key in ("keyboard", "timezone") if "\n" not in defaults.get(key, "\n")]
+    lines = [f"{key.upper()}={defaults[key]}" for key in ("keyboard", "timezone", "region") if "\n" not in defaults.get(key, "\n")]
     if not lines:
         return
     marker = ctx.target / "etc/omarchy/form-defaults"

@@ -211,9 +211,12 @@ class PresetTest(unittest.TestCase):
 
     def test_preset_fills_in_only_what_the_config_leaves_unset(self):
         china = {"keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai", "language": "zh-CN", "region": "cn"}
-        ctx = self.from_env({"timezone": "UTC"}, china)  # an autoinstall drive with neither field
+        ctx = self.from_env({"timezone": "UTC"}, china)  # an autoinstall drive, or a deferred install, with neither field
         self.assertEqual((ctx.region, ctx.omarchy_install["language"]), ("cn", "zh-CN"))
-        self.assertEqual(ctx.omarchy_install["form_defaults"], {"keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai"})
+        # The fallback region is left for first-boot owner setup to settle.
+        self.assertEqual(ctx.omarchy_install["form_defaults"], {"keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai", "region": "cn"})
+        self.assertNotIn("region", self.from_env({"timezone": "Asia/Shanghai"}, china).omarchy_install["form_defaults"])
+        self.assertNotIn("region", self.from_env({"timezone": "UTC", "omarchy_install": {"region": "cn"}}, china).omarchy_install["form_defaults"])
         ctx = self.from_env({"timezone": "UTC", "omarchy_install": {"language": "da", "region": "global"}}, china)
         self.assertEqual((ctx.region, ctx.omarchy_install["language"]), ("global", "da"))
         self.assertEqual(self.from_env({"timezone": "Asia/Taipei"}, china).region, "global")
@@ -225,8 +228,8 @@ class PresetTest(unittest.TestCase):
         phases_impl._write_form_defaults(types.SimpleNamespace(target=target, omarchy_install={"form_defaults": {}}))
         self.assertFalse((target / "etc/omarchy/form-defaults").exists())
         phases_impl._write_form_defaults(types.SimpleNamespace(target=target, omarchy_install={"form_defaults": {
-            "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai\nKEYBOARD=evil"}}))
-        self.assertEqual((target / "etc/omarchy/form-defaults").read_text(), "KEYBOARD=Chinese (Simplified, Pinyin)\n")
+            "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai\nKEYBOARD=evil", "region": "cn"}}))
+        self.assertEqual((target / "etc/omarchy/form-defaults").read_text(), "KEYBOARD=Chinese (Simplified, Pinyin)\nREGION=cn\n")
 
     def test_language_marker_is_written_only_for_a_preset(self):
         target = self.root / "target"

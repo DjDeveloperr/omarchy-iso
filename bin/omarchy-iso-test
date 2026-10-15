@@ -53,6 +53,7 @@ SYNC_ALL=false
 KEYBOARD_LABEL="English (US)"
 # The row the ISO's installer preselects: English (US), or a preset's choice.
 KEYBOARD_DEFAULT="English (US)"
+KEYBOARD_CHOSEN=false
 PRESET=""
 GUEST_USER="omarchy"
 GUEST_PASSWORD="omarchy"
@@ -60,7 +61,7 @@ GUEST_HOSTNAME="omarchy-test"
 
 while (($#)); do
   case "$1" in
-    --keyboard) KEYBOARD_LABEL="$2"; shift ;;
+    --keyboard) KEYBOARD_LABEL="$2"; KEYBOARD_CHOSEN=true; shift ;;
     --preset) PRESET="$2"; shift ;;
     --encrypt) ENCRYPT=true ;;
     --provision) PROVISION=true ;;
@@ -99,7 +100,7 @@ if [[ -n $PRESET ]]; then
   preset_file="$REPO_DIR/configs/presets/$PRESET.json"
   [[ -f $preset_file ]] || { echo "Unknown preset: $PRESET" >&2; exit 1; }
   KEYBOARD_DEFAULT=$(jq -r '.keyboard // "English (US)"' "$preset_file")
-  [[ $KEYBOARD_LABEL != "English (US)" ]] || KEYBOARD_LABEL=$KEYBOARD_DEFAULT
+  $KEYBOARD_CHOSEN || KEYBOARD_LABEL=$KEYBOARD_DEFAULT
 fi
 
 case "$KEYBOARD_LABEL" in

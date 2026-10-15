@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .keyboard import validate_input_selection
-from .region import GLOBAL, resolve_region
+from .region import GLOBAL, region_for_timezone, resolve_region
 
 LANGUAGES = Path("/usr/share/omarchy/default/i18n/locales.json")
 PRESET = Path("/usr/share/omarchy-iso/preset.json")
@@ -96,10 +96,15 @@ class InstallContext:
         preset = load_preset()
         if preset.get("language") and not omarchy_install.get("language"):
             omarchy_install["language"] = preset["language"]
+        explicit_region = omarchy_install.get("region") not in (None, "")
         region = resolve_region(omarchy_install, user_configuration.get("timezone"), preset=preset.get("region"))
         omarchy_install["region"] = region
         validate_language(omarchy_install.get("language"))
         omarchy_install["form_defaults"] = {key: preset[key] for key in ("keyboard", "timezone") if key in preset}
+        # A region the preset supplied because the timezone named none is
+        # settled again by a first-boot owner setup once the owner picks one.
+        if not explicit_region and region == preset.get("region") and region_for_timezone(user_configuration.get("timezone")) == GLOBAL:
+            omarchy_install["form_defaults"]["region"] = region
 
         # Deferred provisioning: the whole system installs but user creation is deferred to
         # first boot. Selected by the configurator (omarchy_install.defer_provisioning) or by
