@@ -671,9 +671,13 @@ resolve_expected_packages() {
   # Capture before counting: no pipefail here, so a pacman failure inside a
   # pipeline would become a plausible partial count, which never trips the
   # dashboard's fallback.
-  resolved="$(pacman --config "$build_cache_dir/pacman-offline.conf" \
+  # pacman names the unsatisfied dependency on stdout, so show it on failure.
+  if ! resolved="$(pacman --config "$build_cache_dir/pacman-offline.conf" \
     --root "$resolve_root" --dbpath "$resolve_root/var/lib/pacman" \
-    --noconfirm -S --print --print-format '%n' "${targets[@]}")" || return 1
+    --noconfirm -S --print --print-format '%n' "${targets[@]}")"; then
+    printf '%s\n' "$resolved" >&2
+    return 1
+  fi
 
   printf '%s\n' "$resolved" | sort -u | grep -c .
 }
