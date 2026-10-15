@@ -381,7 +381,9 @@ else
   for platform_list in 'omarchy-aarch64*.packages' omarchy-x86_64-only.packages; do
     bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists "usr/share/omarchy/install/$platform_list" 2>/dev/null || true
   done
-  bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/bin/omarchy-hw-platform 2>/dev/null || true
+  # The package installs its commands to /usr/bin and links them from
+  # /usr/share/omarchy/bin, so the detector itself is the one in usr/bin.
+  bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/bin/omarchy-hw-platform 2>/dev/null || true
 fi
 
 # One aarch64 image serves every board, so the runtime it installs has to tell
@@ -410,7 +412,7 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   if [[ -d /omarchy-source ]]; then
     hw_platform=/omarchy-source/bin/omarchy-hw-platform
   else
-    hw_platform=/tmp/omarchy-pkglists/usr/share/omarchy/bin/omarchy-hw-platform
+    hw_platform=/tmp/omarchy-pkglists/usr/bin/omarchy-hw-platform
   fi
 fi
 
