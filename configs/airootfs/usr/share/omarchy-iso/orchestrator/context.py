@@ -5,6 +5,7 @@ archinstall config handler and mirror list handler)."""
 from __future__ import annotations
 
 import json
+import re
 import os
 import secrets
 from dataclasses import dataclass, field
@@ -13,6 +14,19 @@ from typing import Any
 
 from .keyboard import validate_input_selection
 from .region import GLOBAL, resolve_region
+
+LANGUAGES = Path("/usr/share/omarchy/default/i18n/locales.json")
+
+
+def validate_language(language: Any, registry: Path = LANGUAGES) -> None:
+    """A preset desktop language is a registry code, checked before any disk is
+    touched; the target only ever reads it back as data."""
+    if language is None or language == "":
+        return
+    if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", language):
+        raise RuntimeError(f"Unsupported language: {language!r}")
+    if registry.is_file() and language not in json.loads(registry.read_text()):
+        raise RuntimeError(f"Unsupported language: {language!r}")
 
 
 @dataclass
@@ -67,6 +81,7 @@ class InstallContext:
         # region this ISO lacks fails without wiping anything.
         region = resolve_region(omarchy_install, user_configuration.get("timezone"))
         omarchy_install["region"] = region
+        validate_language(omarchy_install.get("language"))
 
         # Deferred provisioning: the whole system installs but user creation is deferred to
         # first boot. Selected by the configurator (omarchy_install.defer_provisioning) or by

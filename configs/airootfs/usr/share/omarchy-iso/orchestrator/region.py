@@ -16,6 +16,9 @@ from pathlib import Path
 
 REGIONS_DIR = Path("/usr/share/omarchy-iso/regions")
 GLOBAL = "global"
+# Hong Kong, Macau and Taiwan are never part of a region, under any of
+# tzdata's names, whatever install media or profile says.
+NEVER_REGIONAL = frozenset({"Asia/Hong_Kong", "Hongkong", "Asia/Macau", "Asia/Macao", "Asia/Taipei", "ROC"})
 
 
 def _entries(path: Path) -> list[str]:
@@ -27,7 +30,7 @@ def _entries(path: Path) -> list[str]:
 
 def region_for_timezone(timezone: str | None, regions_dir: Path | None = None) -> str:
     regions_dir = regions_dir or REGIONS_DIR
-    if timezone and regions_dir.is_dir():
+    if timezone and timezone not in NEVER_REGIONAL and regions_dir.is_dir():
         for profile in sorted(regions_dir.iterdir()):
             if timezone in _entries(profile / "timezones"):
                 return profile.name
@@ -48,5 +51,16 @@ def resolve_region(omarchy_install: dict, timezone: str | None, regions_dir: Pat
     return region
 
 
+def region_for_install(timezone: str | None, preset: str | None = None, regions_dir: Path | None = None) -> str:
+    """A preset ISO's region applies where the chosen timezone names none, so
+    a user who picks another country's timezone gets that country's (or
+    global) defaults, and Hong Kong, Macau and Taiwan always stay global."""
+    regions_dir = regions_dir or REGIONS_DIR
+    region = region_for_timezone(timezone, regions_dir)
+    if region != GLOBAL or not preset or timezone in NEVER_REGIONAL:
+        return region
+    return preset if preset == GLOBAL or (re.fullmatch(r"[a-z]{2}", preset) and (regions_dir / preset).is_dir()) else GLOBAL
+
+
 if __name__ == "__main__":
-    print(region_for_timezone(sys.argv[1] if len(sys.argv) > 1 else None))
+    print(region_for_install(sys.argv[1] if len(sys.argv) > 1 else None, sys.argv[2] if len(sys.argv) > 2 else None))

@@ -76,6 +76,19 @@ OMARCHY_SETTINGS_PACKAGE=$OMARCHY_SETTINGS_PACKAGE
 OMARCHY_NVIM_PACKAGE=$OMARCHY_NVIM_PACKAGE
 EOF
 
+# A preset build (omarchy-iso-make --preset china) preselects the installer's
+# choices for one market and names the ISO after it; without one, the ISO and
+# its installer are exactly the global build.
+if [[ -n ${OMARCHY_ISO_PRESET:-} ]]; then
+  if [[ ! $OMARCHY_ISO_PRESET =~ ^[a-z]+$ || ! -f /configs/presets/$OMARCHY_ISO_PRESET.json ]]; then
+    echo "ERROR: unknown ISO preset: $OMARCHY_ISO_PRESET" >&2
+    exit 1
+  fi
+  cp "/configs/presets/$OMARCHY_ISO_PRESET.json" "$build_cache_dir/airootfs/usr/share/omarchy-iso/preset.json"
+  sed -i "s/^iso_name=\"omarchy\"$/iso_name=\"omarchy-$OMARCHY_ISO_PRESET\"/" "$build_cache_dir/profiledef.sh"
+fi
+rm -rf "$build_cache_dir/presets"
+
 if [[ ${OMARCHY_INSTALL_DEBUG:-} == "1" ]]; then
   touch "$build_cache_dir/airootfs/usr/share/omarchy-iso/install-debug"
   {

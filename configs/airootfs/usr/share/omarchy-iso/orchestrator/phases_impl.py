@@ -300,6 +300,7 @@ def arch_install_system(ctx: InstallContext) -> None:
             installer.add_additional_packages(_runtime_package_list(ctx))
 
             _write_region_marker(ctx)
+            _write_language_marker(ctx)
 
             # Tailscale is bundled in the offline mirror but only installed
             # when an autoinstall drive staged an auth key; must happen here,
@@ -739,6 +740,18 @@ def _write_region_marker(ctx: InstallContext) -> None:
     marker = ctx.target / "etc/omarchy/region"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(ctx.region + "\n")
+    marker.chmod(0o644)
+
+
+def _write_language_marker(ctx: InstallContext) -> None:
+    """Hand a preset desktop language to the runtime's finalizers, which
+    generate its locale and set it per user. No preset writes nothing."""
+    language = ctx.omarchy_install.get("language")
+    if not language:
+        return
+    marker = ctx.target / "etc/omarchy/language"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(language + "\n")
     marker.chmod(0o644)
 
 

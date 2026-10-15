@@ -153,6 +153,52 @@ class RegionSelectionTest(unittest.TestCase):
                 self.assertEqual(commands[-1][0], "/usr/bin/omarchy-apply-system")
 
 
+class PresetTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.regions = write_profiles(self.root)
+
+    def test_never_regional_even_if_a_profile_lists_it(self):
+        (self.regions / "cn/timezones").write_text("Asia/Shanghai\nAsia/Hong_Kong\nAsia/Taipei\nAsia/Macau\n")
+        for timezone in sorted(region.NEVER_REGIONAL):
+            with self.subTest(timezone=timezone):
+                self.assertEqual(region.region_for_timezone(timezone, self.regions), "global")
+                self.assertEqual(region.region_for_install(timezone, "cn", self.regions), "global")
+
+    def test_preset_region_fills_in_where_the_timezone_names_none(self):
+        for timezone, preset, expected in [
+            ("Asia/Shanghai", None, "cn"),
+            ("UTC", None, "global"),
+            ("UTC", "cn", "cn"),
+            ("Europe/Copenhagen", "cn", "cn"),
+            ("UTC", "zz", "global"),
+            ("UTC", "../cn", "global"),
+            ("UTC", "global", "global"),
+        ]:
+            with self.subTest(timezone=timezone, preset=preset):
+                self.assertEqual(region.region_for_install(timezone, preset, self.regions), expected)
+
+    def test_language_is_validated_against_the_registry(self):
+        registry = self.root / "locales.json"
+        registry.write_text(json.dumps({"en": {}, "zh-CN": {}}))
+        for language in (None, "", "zh-CN"):
+            context.validate_language(language, registry)
+        for language in ("zh_CN", "xx", "../zh-CN", "zh-CN; reboot", 7, ["zh-CN"]):
+            with self.subTest(language=language), self.assertRaises(RuntimeError):
+                context.validate_language(language, registry)
+
+    def test_language_marker_is_written_only_for_a_preset(self):
+        target = self.root / "target"
+        phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install={}))
+        self.assertFalse((target / "etc/omarchy/language").exists())
+        phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install={"language": "zh-CN"}))
+        marker = target / "etc/omarchy/language"
+        self.assertEqual(marker.read_text(), "zh-CN\n")
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o644)
+
+
 class PrepareRegionsTest(unittest.TestCase):
     def run_prepare(self, regions: Path, root: Path) -> tuple[Path, str]:
         payload = root / "payload"
