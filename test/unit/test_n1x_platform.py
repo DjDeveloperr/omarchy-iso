@@ -16,13 +16,13 @@ sys.modules.setdefault(
     "orchestrator.archinstall_adapter",
     types.ModuleType("orchestrator.archinstall_adapter"),
 )
-from orchestrator import context, phases_impl  # noqa: E402
+from orchestrator import context, phases, phases_impl  # noqa: E402
 
 ROOT_CMDLINE = (
     "cryptdevice=PARTUUID=f073914b-b386-4b56-b181-61ea375509ee:root root=/dev/mapper/root "
     "zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs"
 )
-KERNEL = "linux-omarchy-n1x"
+KERNEL = "linux-omarchy"
 RESCUE_CMDLINE = (
     f"{ROOT_CMDLINE} console=tty0 acpi=nospcr plymouth.enable=0 nomodeset "
     "systemd.unit=multi-user.target fbcon=map:0 loglevel=7"
@@ -33,15 +33,15 @@ NORMAL_CMDLINE = (
 )
 
 
-# Shaped like the limine.conf limine-entry-tool writes for linux-omarchy-n1x with
+# Shaped like the limine.conf limine-entry-tool writes for linux-omarchy with
 # its fallback UKI as the rescue entry.
 def limine_conf(rescue_cmdline=RESCUE_CMDLINE, normal_cmdline=NORMAL_CMDLINE, rescue=True):
     rescue_entry = f"""\
-  //linux-omarchy-n1x-fallback
-  comment: Kernel version: 7.2.5-9-omarchy-n1x
-  comment: kernel-id=linux-omarchy-n1x-fallback
+  //linux-omarchy-fallback
+  comment: Kernel version: 7.2.8-8-omarchy
+  comment: kernel-id=linux-omarchy-fallback
   protocol: efi
-  path: boot():/EFI/Linux/omarchy_linux-omarchy-n1x-fallback.efi#5187fcdd
+  path: boot():/EFI/Linux/omarchy_linux-omarchy-fallback.efi#5187fcdd
   cmdline: {rescue_cmdline}
 """ if rescue else ""
     return f"""\
@@ -50,11 +50,11 @@ default_entry: 2
 
 /+Omarchy
 comment: Omarchy
-  //linux-omarchy-n1x
-  comment: Kernel version: 7.2.5-9-omarchy-n1x
-  comment: kernel-id=linux-omarchy-n1x
+  //linux-omarchy
+  comment: Kernel version: 7.2.8-8-omarchy
+  comment: kernel-id=linux-omarchy
   protocol: efi
-  path: boot():/EFI/Linux/omarchy_linux-omarchy-n1x.efi#1ebecba8
+  path: boot():/EFI/Linux/omarchy_linux-omarchy.efi#1ebecba8
   cmdline: {normal_cmdline}
 {rescue_entry}
 /EFI fallback
@@ -93,14 +93,15 @@ class PlatformKernelTest(unittest.TestCase):
             path.write_text(f"{KERNEL}\n")
             self.assertEqual(context.iso_kernel(path), KERNEL)
 
-    def test_platform_file(self):
+    def test_platform_detector(self):
+        # x86_64 images carry no detector, and one that cannot tell names nothing.
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "omarchy_arm_platform"
-            self.assertEqual(context.iso_arm_platform(path), "")
-            path.write_text("\n")
-            self.assertEqual(context.iso_arm_platform(path), "")
-            path.write_text("n1x\n")
-            self.assertEqual(context.iso_arm_platform(path), "n1x")
+            detector = Path(tmp) / "omarchy-hw-platform"
+            self.assertEqual(context.hw_platform(detector), "")
+            detector.write_text("echo aarch64-qualcomm\n")
+            self.assertEqual(context.hw_platform(detector), "aarch64-qualcomm")
+            detector.write_text("echo aarch64-qualcomm; exit 1\n")
+            self.assertEqual(context.hw_platform(detector), "")
 
 
 class ConfiguratorMirrorsTest(unittest.TestCase):
@@ -156,7 +157,7 @@ class N1xLimineContractTest(unittest.TestCase):
         self.validate(limine_conf(normal_cmdline=ROOT_CMDLINE), "")
 
     def test_entry_without_panel_console_fails(self):
-        with self.assertRaisesRegex(RuntimeError, "linux-omarchy-n1x lacks console=tty0"):
+        with self.assertRaisesRegex(RuntimeError, "linux-omarchy lacks console=tty0"):
             self.validate(limine_conf(normal_cmdline=f"quiet splash acpi=nospcr {ROOT_CMDLINE}"), "n1x")
 
     def test_entry_without_nospcr_fails(self):
@@ -168,7 +169,7 @@ class N1xLimineContractTest(unittest.TestCase):
             self.validate(limine_conf(normal_cmdline=f"console=tty0,115200 acpi=nospcr {ROOT_CMDLINE}"), "n1x")
 
     def test_missing_rescue_entry_fails(self):
-        with self.assertRaisesRegex(RuntimeError, "no linux-omarchy-n1x-fallback rescue entry"):
+        with self.assertRaisesRegex(RuntimeError, "no linux-omarchy-fallback rescue entry"):
             self.validate(limine_conf(rescue=False), "n1x")
 
     # The 2026-09-03 failure: the rescue entry carried the normal cmdline, so
@@ -211,24 +212,66 @@ class Aarch64ConsoleTest(unittest.TestCase):
         self.assertFalse(self.write_defaults("x86_64").exists())
 
 
+class PlatformPackageListTest(unittest.TestCase):
+    # One image serves every board: the installer installs the default set of
+    # the platform the machine is, and the plain one where it has none.
+    def chosen(self, detected, *shipped):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            for name in ("omarchy-base.packages", *shipped):
+                (share / name).write_text("")
+            with mock.patch.object(phases_impl, "hw_platform", return_value=detected):
+                return phases_impl._base_package_file(share).name
+
+    def test_a_platform_gets_its_own_set(self):
+        self.assertEqual(
+            self.chosen("aarch64-qualcomm", "omarchy-base.aarch64-qualcomm.packages", "omarchy-base.aarch64-n1x.packages"),
+            "omarchy-base.aarch64-qualcomm.packages",
+        )
+
+    def test_any_other_machine_gets_the_plain_set(self):
+        self.assertEqual(self.chosen("aarch64", "omarchy-base.aarch64-n1x.packages"), "omarchy-base.packages")
+        self.assertEqual(self.chosen("aarch64-gb10", "omarchy-base.aarch64-n1x.packages"), "omarchy-base.packages")
+        self.assertEqual(self.chosen(""), "omarchy-base.packages")
+
+    # The progress bar counts toward the set the machine really gets.
+    def expected(self, detected):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            (share / "expected-packages").write_text("900\n")
+            (share / "expected-packages.aarch64-n1x").write_text("960\n")
+            with mock.patch.object(phases, "hw_platform", return_value=detected):
+                return phases._expected_package_count(share)
+
+    def test_the_package_count_follows_the_platform(self):
+        self.assertEqual(self.expected("aarch64-n1x"), 960)
+        self.assertEqual(self.expected("aarch64-qualcomm"), 900)
+        self.assertEqual(self.expected(""), 900)
+
+
 class N1xHardwareGateTest(unittest.TestCase):
-    # An N1x image installed somewhere that is not an N1x (a VM, say) gets the
-    # generic aarch64 setup, so the N1x boot contract must not be enforced.
-    def installed_platform(self, returncode):
+    # The same image installs every board, so the N1x boot contract is enforced
+    # only where the target's own detector says the machine is one.
+    def installed_platform(self, returncode, machine="aarch64"):
         ctx = types.SimpleNamespace(target=Path("/mnt"))
-        with mock.patch.object(phases_impl, "iso_arm_platform", return_value="n1x"), \
-                mock.patch.object(phases_impl.subprocess, "run", return_value=mock.Mock(returncode=returncode)) as run, \
-                mock.patch.object(phases_impl, "info"):
+        with mock.patch.object(phases_impl.platform, "machine", return_value=machine), \
+                mock.patch.object(phases_impl.subprocess, "run", return_value=mock.Mock(returncode=returncode)) as run:
             platform = phases_impl._installed_arm_platform(ctx)
-        run.assert_called_once()
-        self.assertEqual(run.call_args.args[0], ["arch-chroot", "/mnt", "omarchy-hw-n1x"])
-        return platform
+        return platform, run
 
     def test_n1x_hardware_is_checked(self):
-        self.assertEqual(self.installed_platform(0), "n1x")
+        platform, run = self.installed_platform(0)
+        self.assertEqual(platform, "n1x")
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["arch-chroot", "/mnt", "omarchy-hw-n1x"])
 
     def test_other_hardware_is_not(self):
-        self.assertEqual(self.installed_platform(1), "")
+        self.assertEqual(self.installed_platform(1)[0], "")
+
+    def test_x86_64_is_never_asked(self):
+        platform, run = self.installed_platform(0, machine="x86_64")
+        self.assertEqual(platform, "")
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -14,11 +14,13 @@ filter_aarch64_packages() {
   for package in "$@"; do
     case "$package" in
       linux|linux-omarchy|linux-t2)
-        echo "aarch64: replacing $package with $kernel" >&2
+        # linux-omarchy is also the aarch64 kernel's own name: it keeps it on an
+        # image that boots it, and the image's kernel stands in everywhere else.
+        [[ $package == "$kernel" ]] || echo "aarch64: replacing $package with $kernel" >&2
         printf '%s\n' "$kernel"
         ;;
       linux-headers|linux-omarchy-headers|linux-t2-headers)
-        echo "aarch64: replacing $package with $kernel-headers" >&2
+        [[ $package == "$kernel-headers" ]] || echo "aarch64: replacing $package with $kernel-headers" >&2
         printf '%s\n' "$kernel-headers"
         ;;
       nvim)

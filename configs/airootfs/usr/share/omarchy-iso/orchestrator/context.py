@@ -8,6 +8,7 @@ import platform
 import json
 import os
 import secrets
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -187,16 +188,21 @@ def _inject_provisioning_encryption_password(arch_configuration: dict, user_cred
     user_credentials["encryption_password"] = password
 
 
-# build-iso.sh records the board an aarch64 image was built for; x86_64
-# images carry an empty file.
-ISO_ARM_PLATFORM_FILE = Path("/root/omarchy_arm_platform")
+# One aarch64 image serves every board, so the installer asks the machine which
+# one it is. build-iso.sh ships the runtime's own detector beside the package
+# lists; it names aarch64, aarch64-qualcomm, aarch64-n1x or aarch64-gb10.
+# x86_64 images carry none.
+HW_PLATFORM_DETECTOR = Path("/usr/share/omarchy-iso/omarchy-hw-platform")
 
 
-def iso_arm_platform(path: Path = ISO_ARM_PLATFORM_FILE) -> str:
-    try:
-        return path.read_text().strip()
-    except OSError:
+def hw_platform(detector: Path = HW_PLATFORM_DETECTOR) -> str:
+    if not detector.is_file():
         return ""
+    # The detector refuses a Bash that was not started in privileged mode.
+    result = subprocess.run(["/bin/bash", "-p", str(detector)], capture_output=True, text=True)
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 # build-iso.sh records the kernel an aarch64 image installs; x86_64 images
@@ -212,7 +218,7 @@ def iso_kernel(path: Path = ISO_KERNEL_FILE) -> str:
 
 
 def _default_kernel(pci_devices: Path = Path("/sys/bus/pci/devices"), platform_kernel: str | None = None) -> str:
-    # An aarch64 image is built for one platform kernel and nothing else boots;
+    # An aarch64 image boots and installs one kernel and nothing else boots;
     # the configurator's detect_kernel makes the same choice.
     platform_kernel = iso_kernel() if platform_kernel is None else platform_kernel
     if platform_kernel:
