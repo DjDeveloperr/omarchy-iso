@@ -25,10 +25,9 @@ def write_profiles(root: Path) -> Path:
     cn = regions / "cn"
     (cn / "pacman").mkdir(parents=True)
     (cn / "timezones").write_text("# China\nAsia/Shanghai\n\n  Asia/Urumqi  \n")
-    (cn / "packages").write_text("# keyring first\narchlinuxcn-keyring\nextra-tool\n")
-    (cn / "pacman/pacman.conf.append").write_text("[archlinuxcn]\nServer = https://example.invalid/$arch\n")
     for channel in ("stable", "rc", "edge"):
         (cn / f"pacman/mirrorlist-{channel}.prepend").write_text(f"Server = https://{channel}.example.invalid/$repo/os/$arch\n")
+        (cn / f"pacman/omarchy-{channel}.prepend").write_text(f"Server = https://pkgs.example.invalid/{channel}/$arch\n")
     return regions
 
 
@@ -46,7 +45,13 @@ class RegionSelectionTest(unittest.TestCase):
         for timezone, expected in [
             ("Asia/Shanghai", "cn"),
             ("Asia/Urumqi", "cn"),
+            # Hong Kong, Macau and Taiwan are never part of any region.
             ("Asia/Hong_Kong", "global"),
+            ("Hongkong", "global"),
+            ("Asia/Macau", "global"),
+            ("Asia/Macao", "global"),
+            ("Asia/Taipei", "global"),
+            ("ROC", "global"),
             ("America/New_York", "global"),
             ("UTC", "global"),
             ("# China", "global"),
@@ -67,12 +72,6 @@ class RegionSelectionTest(unittest.TestCase):
         for bad in ("us", "CN", "..", "cn/../cn", True, 1, ["cn"]):
             with self.subTest(region=bad), self.assertRaises(RuntimeError):
                 region.resolve_region({"region": bad}, "UTC")
-
-    def test_profile_packages_and_keyrings(self):
-        self.assertEqual(region.region_packages("cn"), ["archlinuxcn-keyring", "extra-tool"])
-        self.assertEqual(region.region_keyrings("cn"), ["archlinuxcn"])
-        self.assertEqual(region.region_packages("global"), [])
-        self.assertEqual(region.region_keyrings("global"), [])
 
     def from_env(self, config: dict) -> context.InstallContext:
         config_path = self.root / "config.json"
@@ -106,8 +105,8 @@ class RegionSelectionTest(unittest.TestCase):
         self.assertEqual(marker.read_text(), "cn\n")
         self.assertEqual(marker.stat().st_mode & 0o777, 0o644)
 
-    def test_region_packages_install_while_the_offline_mirror_is_mounted(self):
-        for selected, expected_packages in [("global", []), ("cn", [["archlinuxcn-keyring", "extra-tool"]])]:
+    def test_region_adds_no_packages_and_marks_only_regional_targets(self):
+        for selected in ("global", "cn"):
             with self.subTest(region=selected), ExitStack() as stack:
                 events = []
                 installer = mock.MagicMock()
@@ -138,14 +137,11 @@ class RegionSelectionTest(unittest.TestCase):
 
                 phases_impl.arch_install_system(ctx)
 
-                self.assertEqual(events, [["linux-omarchy-headers"], ["omarchy"], *expected_packages, "unmount"])
+                self.assertEqual(events, [["linux-omarchy-headers"], ["omarchy"], "unmount"])
                 self.assertEqual((ctx.target / "etc/omarchy/region").exists(), selected != "global")
 
-    def test_finalizer_trusts_only_the_selected_region(self):
-        for selected, expected in [
-            ("global", []),
-            ("cn", [["pacman-key", "--init"], ["pacman-key", "--populate", "archlinux", "archlinuxcn"]]),
-        ]:
+    def test_finalizer_adds_no_trust_for_any_region(self):
+        for selected in ("global", "cn"):
             with self.subTest(region=selected), \
                     mock.patch.object(phases_impl, "_run_target_setup_command") as run, \
                     mock.patch.object(phases_impl, "_mask_mkinitcpio_pacman_hooks"), \
@@ -153,16 +149,14 @@ class RegionSelectionTest(unittest.TestCase):
                 ctx = types.SimpleNamespace(region=selected, defer_provisioning=True, target=Path("/unused"))
                 phases_impl.run_system_finalizer(ctx)
                 commands = [call.args[1] for call in run.call_args_list]
-                self.assertEqual(commands[:-1], expected)
+                self.assertEqual(commands[:-1], [])
                 self.assertEqual(commands[-1][0], "/usr/bin/omarchy-apply-system")
 
 
 class PrepareRegionsTest(unittest.TestCase):
-    def run_prepare(self, regions: Path, root: Path) -> tuple[Path, Path, str]:
+    def run_prepare(self, regions: Path, root: Path) -> tuple[Path, str]:
         payload = root / "payload"
         payload.mkdir()
-        online = root / "online.conf"
-        online.write_text("[core]\nInclude = /etc/pacman.d/mirrorlist\n")
         stubs = root / "bin"
         stubs.mkdir()
         log = root / "calls.log"
@@ -171,24 +165,22 @@ class PrepareRegionsTest(unittest.TestCase):
             stub.write_text(f'#!/bin/bash\necho "{name} $*" >> "{log}"\n')
             stub.chmod(0o755)
         subprocess.run(
-            ["bash", str(ROOT / "builder/prepare-regions.sh"), str(regions), str(payload), str(online)],
+            ["bash", str(ROOT / "builder/prepare-regions.sh"), str(regions), str(payload)],
             env={**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"},
             check=True, capture_output=True, text=True,
         )
-        return payload, online, log.read_text() if log.exists() else ""
+        return payload, log.read_text() if log.exists() else ""
 
-    def test_ships_every_profile_and_bootstraps_its_keyring(self):
+    def test_ships_every_profile_and_trusts_nothing_new(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             regions = write_profiles(root)
-            payload, online, calls = self.run_prepare(regions, root)
+            payload, calls = self.run_prepare(regions, root)
             self.assertEqual((payload / "regions/cn/timezones").read_text(), (regions / "cn/timezones").read_text())
-            self.assertIn("[archlinuxcn]", online.read_text())
-            self.assertTrue(online.read_text().startswith("[core]\n"))
-            self.assertEqual(calls.splitlines(), [
-                f"pacman --config {online} --noconfirm -Sy --needed archlinuxcn-keyring",
-                "pacman-key --populate archlinuxcn",
-            ])
+            self.assertEqual((payload / "regions/cn/pacman/omarchy-rc.prepend").read_text(),
+                             (regions / "cn/pacman/omarchy-rc.prepend").read_text())
+            # Staging a profile downloads nothing and imports no key.
+            self.assertEqual(calls, "")
 
     def settings_package(self, root: Path, with_regions: bool) -> Path:
         tree = root / "pkgroot"
@@ -203,15 +195,14 @@ class PrepareRegionsTest(unittest.TestCase):
     def test_published_build_reads_profiles_from_the_settings_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            payload, online, calls = self.run_prepare(self.settings_package(root, with_regions=True), root)
-            self.assertEqual((payload / "regions/cn/packages").read_text(), "# keyring first\narchlinuxcn-keyring\nextra-tool\n")
-            self.assertIn("[archlinuxcn]", online.read_text())
-            self.assertIn("pacman-key --populate archlinuxcn", calls)
+            payload, calls = self.run_prepare(self.settings_package(root, with_regions=True), root)
+            self.assertTrue((payload / "regions/cn/pacman/omarchy-stable.prepend").is_file())
+            self.assertEqual(calls, "")
 
     def test_settings_package_without_profiles_builds_a_global_iso(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            payload, online, calls = self.run_prepare(self.settings_package(root, with_regions=False), root)
+            payload, calls = self.run_prepare(self.settings_package(root, with_regions=False), root)
             self.assertFalse((payload / "regions").exists())
             self.assertEqual(calls, "")
 
@@ -226,9 +217,8 @@ class PrepareRegionsTest(unittest.TestCase):
     def test_runtime_without_profiles_builds_a_global_iso(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            payload, online, calls = self.run_prepare(root / "missing", root)
+            payload, calls = self.run_prepare(root / "missing", root)
             self.assertFalse((payload / "regions").exists())
-            self.assertNotIn("archlinuxcn", online.read_text())
             self.assertEqual(calls, "")
 
 

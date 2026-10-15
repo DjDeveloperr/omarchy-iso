@@ -36,7 +36,7 @@ from . import archinstall_adapter as arch
 from .command import capture, capture_identifier, require_text
 from .context import InstallContext
 from .keyboard import configure_keyboard
-from .region import GLOBAL, region_keyrings, region_packages
+from .region import GLOBAL
 from .ui import error, info
 
 
@@ -299,9 +299,6 @@ def arch_install_system(ctx: InstallContext) -> None:
             info("› installing Omarchy runtime + omarchy-base.packages")
             installer.add_additional_packages(_runtime_package_list(ctx))
 
-            if region_pkgs := region_packages(ctx.region):
-                info(f"› installing {ctx.region} region packages: {', '.join(region_pkgs)}")
-                installer.add_additional_packages(region_pkgs)
             _write_region_marker(ctx)
 
             # Tailscale is bundled in the offline mirror but only installed
@@ -1152,14 +1149,6 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str 
 
 
 def run_system_finalizer(ctx: InstallContext) -> None:
-    # The region's keyring packages are installed by now, but the build
-    # container's GPG state is not inherited. Initialize the target's trust
-    # database with only this region's keys before the finalizer enables its
-    # online repositories; global installs never trust them.
-    if keyrings := region_keyrings(ctx.region):
-        _run_target_setup_command(ctx, ["pacman-key", "--init"])
-        _run_target_setup_command(ctx, ["pacman-key", "--populate", "archlinux", *keyrings])
-
     if ctx.defer_provisioning:
         cmd = ["/usr/bin/omarchy-apply-system", "--defer-provisioning", "--first-install"]
     else:

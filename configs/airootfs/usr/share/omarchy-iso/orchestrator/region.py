@@ -1,7 +1,7 @@
 """Region selection: which of the runtime's region profiles a target gets.
 
 The builder copies every profile from the bundled runtime's default/regions/
-into REGIONS_DIR, and their packages into the offline mirror. Nobody picks a
+into REGIONS_DIR; a profile only reorders mirrors. Nobody picks a
 region by hand: the timezone the user already chose selects it, and an
 autoinstall config may name one explicitly in omarchy_install.region. Run as
 `python -m orchestrator.region <timezone>` to print the region the installer
@@ -46,22 +46,6 @@ def resolve_region(omarchy_install: dict, timezone: str | None, regions_dir: Pat
     ):
         raise RuntimeError(f"Unsupported region: {region!r}")
     return region
-
-
-def region_packages(region: str, regions_dir: Path | None = None) -> list[str]:
-    if region == GLOBAL:
-        return []
-    return _entries((regions_dir or REGIONS_DIR) / region / "packages")
-
-
-def region_keyrings(region: str, regions_dir: Path | None = None) -> list[str]:
-    """Pacman keyrings the profile ships, named the Arch way: <name>-keyring
-    installs /usr/share/pacman/keyrings/<name>.gpg."""
-    return [
-        package.removesuffix("-keyring")
-        for package in region_packages(region, regions_dir)
-        if package.endswith("-keyring")
-    ]
 
 
 if __name__ == "__main__":
