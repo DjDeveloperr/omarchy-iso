@@ -553,6 +553,28 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   mapfile -t all_packages < <(printf '%s\n' "${all_packages[@]}" | sort -u)
 fi
 
+# Leaving the local builds out of the download also leaves out what they
+# depend on, so a dependency no package list names (omarchy-dev's
+# omarchy-themes-intros) would be missing from the mirror. Name each one,
+# except what the local builds provide themselves (omarchy-settings-dev's
+# omarchy-security-functions): asked for by name, pacman would fetch the
+# published provider on top of the local build.
+if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+  local_pkginfo=$(
+    for pkg in "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"; do
+      for archive in "$offline_mirror_dir/$pkg"-[0-9]*.pkg.tar.*; do
+        [[ $archive == *.sig ]] || bsdtar -xOf "$archive" .PKGINFO
+      done
+    done
+  )
+  mapfile -t local_provides < <(sed -n 's/^\(pkgname\|provides\) = //p' <<<"$local_pkginfo" | sed 's/[<>=].*//')
+  mapfile -t local_depends < <(
+    sed -n 's/^depend = //p' <<<"$local_pkginfo" | sed 's/[<>=].*//' |
+      grep -Fxv -f <(printf '%s\n' "${local_provides[@]}") || true
+  )
+  mapfile -t all_packages < <(printf '%s\n' "${all_packages[@]}" "${local_depends[@]}" | sort -u)
+fi
+
 # With --local-source we already built these omarchy* packages directly into
 # the mirror; strip them from the pacman -Syw list so it doesn't try to fetch
 # the published versions on top.
