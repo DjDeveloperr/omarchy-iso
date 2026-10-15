@@ -28,11 +28,6 @@ case "$OMARCHY_ARCH" in
       echo "ERROR: aarch64 builds boot linux-omarchy (got '$OMARCHY_KERNEL')" >&2
       exit 1
     fi
-    # No repository publishes linux-omarchy for aarch64 yet, so it comes in a bundle.
-    if [[ ! -d /packages ]]; then
-      echo "ERROR: aarch64 builds require the package bundle mounted at /packages" >&2
-      exit 1
-    fi
     if [[ -d /packages && ! -f /packages/SHA256SUMS ]]; then
       echo "ERROR: the package bundle mounted at /packages needs a SHA256SUMS" >&2
       exit 1

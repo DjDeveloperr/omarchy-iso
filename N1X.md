@@ -85,19 +85,17 @@ sudo ufw delete allow ssh
 
 ## Building the images
 
-Builds run natively on an aarch64 host with Docker, from sibling checkouts of omarchy, omarchy-pkgs and this repository. They need a platform package directory with the packages no repository publishes yet, built from omarchy-pkgs, and a `SHA256SUMS` covering them:
-
-- `linux-omarchy` and `linux-omarchy-headers`
-- `asus-proart-p14-speaker-firmware`
+Builds run natively on an aarch64 host with Docker, from sibling checkouts of omarchy, omarchy-pkgs and this repository. The kernel and the N1x packages come from the edge aarch64 repository.
 
 ```bash
 # Normal image
-bin/omarchy-iso-make --arch aarch64 \
-  --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
+bin/omarchy-iso-make --arch aarch64 --local-source ../omarchy-installer ../omarchy-pkgs
 
 # Dev image: adds key-only SSH for your public key and verbose installer output
 bin/omarchy-iso-make --arch aarch64 --dev-ssh ~/.ssh/id_ed25519.pub --debug \
-  --package-dir <platform-packages> --local-source ../omarchy-installer ../omarchy-pkgs
+  --local-source ../omarchy-installer ../omarchy-pkgs
 ```
+
+To build on packages the repository doesn't have yet, such as a kernel under test, put them in a directory with a `SHA256SUMS` covering them and add `--package-dir <dir>`. They take precedence over the repositories.
 
 The images land in `release/`. On an aarch64 host, `bin/omarchy-iso-boot` boots them in a KVM virtual machine. The VM installs Omarchy like any aarch64 machine; the N1x-specific setup only runs on N1x hardware.
