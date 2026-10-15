@@ -212,14 +212,15 @@ bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL
 rm -f /root/qualcomm-live-uki.sh
 CUSTOMIZE
   chmod 0755 "$build_cache_dir/airootfs/root/customize_airootfs.sh"
-  # The DSP driver stays out of the live initramfs (see grub.cfg). On the one
-  # laptop it is tested on, this starts it once the live root is in RAM, for
-  # USB hotplug and the battery reading. It does nothing anywhere else.
+  # Keep the existing late-start path when early firmware is unavailable.
   install -Dm0755 /builder/qualcomm/omarchy-live-dsp "$build_cache_dir/airootfs/usr/local/bin/omarchy-live-dsp"
   install -Dm0644 /builder/qualcomm/omarchy-live-dsp.service "$build_cache_dir/airootfs/etc/systemd/system/omarchy-live-dsp.service"
   mkdir -p "$build_cache_dir/airootfs/etc/systemd/system/multi-user.target.wants"
   ln -sf /etc/systemd/system/omarchy-live-dsp.service "$build_cache_dir/airootfs/etc/systemd/system/multi-user.target.wants/omarchy-live-dsp.service"
   printf '%s\n' 'file_permissions["/usr/local/bin/omarchy-live-dsp"]="0:0:755"' >>"$build_cache_dir/profiledef.sh"
+  install -Dm0755 /builder/qualcomm/early-startup-install "$build_cache_dir/airootfs/usr/lib/initcpio/install/qcom_early_startup"
+  install -Dm0755 /builder/qualcomm/early-startup "$build_cache_dir/airootfs/usr/lib/initcpio/hooks/qcom_early_startup"
+  install -Dm0644 /builder/qualcomm/early-firmware.py "$build_cache_dir/airootfs/usr/lib/initcpio/qcom-early-firmware.py"
   rm -rf "$build_cache_dir/syslinux" "$build_cache_dir/efiboot"
 else
   boot_splash_kernel_options="quiet splash "
@@ -327,7 +328,7 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # openssh and pciutils serve the recovery entry and remote debugging.
   # For the Snapdragon laptops: ukify builds the live UKI, and the installer
   # saves a laptop's signed firmware from Windows with qcom-firmware-extract.
-  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted systemd-ukify linux-firmware-qcom qcom-firmware-extract)
+  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted systemd-ukify linux-firmware-qcom qcom-firmware-extract python)
 else
   arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
 fi

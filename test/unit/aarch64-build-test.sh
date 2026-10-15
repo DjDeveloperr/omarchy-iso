@@ -153,7 +153,7 @@ make_refuses 'Unknown option: --platform' --arch aarch64 --platform n1x --edge
 # firmware provides none. Every image tries to build one from its own kernel.
 uki="$ROOT/builder/qualcomm/live-uki.sh"
 bash -n "$uki"
-grep -Fq 'parted systemd-ukify linux-firmware-qcom qcom-firmware-extract)' "$ROOT/builder/build-iso.sh" \
+grep -Fq 'parted systemd-ukify linux-firmware-qcom qcom-firmware-extract python)' "$ROOT/builder/build-iso.sh" \
   || fail "the live image lacks ukify or the Snapdragon firmware tools"
 # The UKI is built in the image's customize step, once pacstrap has made the
 # kernel and initramfs it wraps.
@@ -167,7 +167,8 @@ if [[ ! -d /boot/dtbs/linux-omarchy/qcom ]]; then
   grep -Fq 'ships no Windows-on-ARM device trees' <<<"$out" || fail "a missing live UKI is not explained: $out"
 fi
 grep -Fq "chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi" "$ROOT/configs/grub/grub.cfg" || fail "GRUB does not chainload the live UKI"
-grep -Fq "modprobe.blacklist=qcom_q6v5_pas" "$ROOT/configs/grub/grub.cfg" || fail "the live UKI entry loads the DSP driver in the initramfs"
+grep -F 'chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq 'omarchy.qcom_early=1' || fail "the live UKI does not enable early Qualcomm startup"
+grep -F 'chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq 'modprobe.blacklist=qcom_q6v5_pas' || fail "the live UKI must protect the legacy path from automatic DSP startup"
 grep -F 'omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq ' iommu.passthrough=0 ' || fail "the live UKI entry leaves device memory access untranslated"
 grep -Fqx 'dtb_dir=/boot/dtbs/$1/qcom' "$uki" || fail "the live UKI does not take the device trees the kernel keeps under its own name"
 # mkarchiso copies the UKI onto the ISO only with this patch, applied after the GRUB one.
