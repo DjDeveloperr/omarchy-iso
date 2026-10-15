@@ -16,11 +16,24 @@ from .keyboard import validate_input_selection
 from .region import GLOBAL, resolve_region
 
 LANGUAGES = Path("/usr/share/omarchy/default/i18n/locales.json")
+PRESET = Path("/usr/share/omarchy-iso/preset.json")
 
 
-def validate_language(language: Any, registry: Path = LANGUAGES) -> None:
+def load_preset(path: Path | None = None) -> dict[str, str]:
+    """The choices a market's install media were built with (omarchy-iso-make
+    --preset). Applied here rather than in the configurator, so unattended
+    installs from the same media get them too."""
+    path = path or PRESET
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text())
+    return {key: data[key] for key in ("keyboard", "timezone", "language", "region") if isinstance(data.get(key), str)}
+
+
+def validate_language(language: Any, registry: Path | None = None) -> None:
     """A preset desktop language is a registry code, checked before any disk is
     touched; the target only ever reads it back as data."""
+    registry = registry or LANGUAGES
     if language is None or language == "":
         return
     if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", language):
@@ -79,9 +92,14 @@ class InstallContext:
 
         # Resolved before any disk is touched, so an autoinstall naming a
         # region this ISO lacks fails without wiping anything.
-        region = resolve_region(omarchy_install, user_configuration.get("timezone"))
+        # A preset fills in only what the install configuration leaves unset.
+        preset = load_preset()
+        if preset.get("language") and not omarchy_install.get("language"):
+            omarchy_install["language"] = preset["language"]
+        region = resolve_region(omarchy_install, user_configuration.get("timezone"), preset=preset.get("region"))
         omarchy_install["region"] = region
         validate_language(omarchy_install.get("language"))
+        omarchy_install["form_defaults"] = {key: preset[key] for key in ("keyboard", "timezone") if key in preset}
 
         # Deferred provisioning: the whole system installs but user creation is deferred to
         # first boot. Selected by the configurator (omarchy_install.defer_provisioning) or by

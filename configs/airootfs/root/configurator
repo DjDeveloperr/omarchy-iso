@@ -25,28 +25,17 @@ fi
 source "$SETUP_FORM"
 
 # Preset install media (omarchy-iso-make --preset) preselect the keyboard and
-# timezone and carry a desktop language and a fallback region. Every choice
-# stays the user's to change; without a preset the installer is the global one.
+# timezone; the orchestrator applies the preset's language and region. Every
+# choice stays the user's to change; without a preset this is the global one.
 ISO_PRESET="${ISO_PRESET:-/usr/share/omarchy-iso/preset.json}"
 ORCHESTRATOR_DIR="${ORCHESTRATOR_DIR:-/usr/share/omarchy-iso}"
-preset_language=""
 preset_region=""
 if [[ -r $ISO_PRESET ]]; then
   OMARCHY_FORM_KEYBOARD_DEFAULT=$(jq -r '.keyboard // empty' "$ISO_PRESET")
   OMARCHY_FORM_TIMEZONE_DEFAULT=$(jq -r '.timezone // empty' "$ISO_PRESET")
   export OMARCHY_FORM_KEYBOARD_DEFAULT OMARCHY_FORM_TIMEZONE_DEFAULT
-  preset_language=$(jq -r '.language // empty' "$ISO_PRESET")
   preset_region=$(jq -r '.region // empty' "$ISO_PRESET")
 fi
-
-# The install fields a preset adds after input_xkb_layout; empty, so a global
-# configuration is byte for byte what it was.
-preset_install_fields() {
-  [[ -r $ISO_PRESET ]] || return 0
-  local region
-  region=$(cd "$ORCHESTRATOR_DIR" 2>/dev/null && python -m orchestrator.region "$1" "$preset_region") || region="global"
-  printf '\n        "language": %s,\n        "region": %s,' "$(jq -Rn --arg v "$preset_language" '$v')" "$(jq -Rn --arg v "$region" '$v')"
-}
 
 # Partition creation helpers, shared with test/partition-numbering-test.sh so
 # the numbering logic can be exercised without a real disk.
@@ -833,7 +822,7 @@ run_partition_execute() {
     "custom_commands": [],
     "omarchy_install": {
         "input_method": "${keyboard_input_method:-none}",
-        "input_xkb_layout": "${keyboard_xkb_layout:-}",$(preset_install_fields "$timezone")
+        "input_xkb_layout": "${keyboard_xkb_layout:-}",
         "mode": "protected",
         "target_mount": "/mnt",
         "boot": {
@@ -1175,7 +1164,7 @@ cat <<-_EOF_ >user_configuration.json
     "custom_commands": [],
     "omarchy_install": {
         "input_method": "${keyboard_input_method:-none}",
-        "input_xkb_layout": "${keyboard_xkb_layout:-}",$(preset_install_fields "$timezone")
+        "input_xkb_layout": "${keyboard_xkb_layout:-}",
         "mode": "full_disk",
         "defer_provisioning": $defer_provisioning,
         "target_mount": "/mnt",

@@ -189,6 +189,45 @@ class PresetTest(unittest.TestCase):
             with self.subTest(language=language), self.assertRaises(RuntimeError):
                 context.validate_language(language, registry)
 
+    def from_env(self, config: dict, preset: dict | None) -> context.InstallContext:
+        preset_path = self.root / "preset.json"
+        if preset is None:
+            preset_path.unlink(missing_ok=True)
+        else:
+            preset_path.write_text(json.dumps(preset))
+        registry = self.root / "locales.json"
+        registry.write_text(json.dumps({"en": {}, "zh-CN": {}, "da": {}}))
+        config_path, creds_path = self.root / "config.json", self.root / "creds.json"
+        config_path.write_text(json.dumps(config))
+        creds_path.write_text(json.dumps({"users": [{"username": "test"}]}))
+        with mock.patch.dict(os.environ, {
+            "OMARCHY_INSTALL_CONFIG": str(config_path),
+            "OMARCHY_INSTALL_CREDS": str(creds_path),
+            "OMARCHY_INSTALL_STATE_DIR": str(self.root / "state"),
+        }, clear=True), mock.patch.object(context, "_default_kernel", return_value="linux-omarchy"), \
+                mock.patch.object(context, "PRESET", preset_path), mock.patch.object(context, "LANGUAGES", registry), \
+                mock.patch.object(region, "REGIONS_DIR", self.regions):
+            return context.InstallContext.from_env()
+
+    def test_preset_fills_in_only_what_the_config_leaves_unset(self):
+        china = {"keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai", "language": "zh-CN", "region": "cn"}
+        ctx = self.from_env({"timezone": "UTC"}, china)  # an autoinstall drive with neither field
+        self.assertEqual((ctx.region, ctx.omarchy_install["language"]), ("cn", "zh-CN"))
+        self.assertEqual(ctx.omarchy_install["form_defaults"], {"keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai"})
+        ctx = self.from_env({"timezone": "UTC", "omarchy_install": {"language": "da", "region": "global"}}, china)
+        self.assertEqual((ctx.region, ctx.omarchy_install["language"]), ("global", "da"))
+        self.assertEqual(self.from_env({"timezone": "Asia/Taipei"}, china).region, "global")
+        ctx = self.from_env({"timezone": "UTC"}, None)
+        self.assertEqual((ctx.region, ctx.omarchy_install.get("language"), ctx.omarchy_install["form_defaults"]), ("global", None, {}))
+
+    def test_form_defaults_are_written_as_data_only_for_a_preset(self):
+        target = self.root / "target"
+        phases_impl._write_form_defaults(types.SimpleNamespace(target=target, omarchy_install={"form_defaults": {}}))
+        self.assertFalse((target / "etc/omarchy/form-defaults").exists())
+        phases_impl._write_form_defaults(types.SimpleNamespace(target=target, omarchy_install={"form_defaults": {
+            "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai\nKEYBOARD=evil"}}))
+        self.assertEqual((target / "etc/omarchy/form-defaults").read_text(), "KEYBOARD=Chinese (Simplified, Pinyin)\n")
+
     def test_language_marker_is_written_only_for_a_preset(self):
         target = self.root / "target"
         phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install={}))

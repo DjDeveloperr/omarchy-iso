@@ -37,11 +37,11 @@ def region_for_timezone(timezone: str | None, regions_dir: Path | None = None) -
     return GLOBAL
 
 
-def resolve_region(omarchy_install: dict, timezone: str | None, regions_dir: Path | None = None) -> str:
+def resolve_region(omarchy_install: dict, timezone: str | None, regions_dir: Path | None = None, preset: str | None = None) -> str:
     regions_dir = regions_dir or REGIONS_DIR
     region = omarchy_install.get("region")
     if region is None or region == "":
-        return region_for_timezone(timezone, regions_dir)
+        return region_for_install(timezone, preset, regions_dir)
     # Profiles are named by ISO 3166-1 alpha-2 code; checking the shape first
     # keeps a path like ".." from passing the directory test.
     if not isinstance(region, str) or (
@@ -52,9 +52,9 @@ def resolve_region(omarchy_install: dict, timezone: str | None, regions_dir: Pat
 
 
 def region_for_install(timezone: str | None, preset: str | None = None, regions_dir: Path | None = None) -> str:
-    """A preset ISO's region applies where the chosen timezone names none, so
-    a user who picks another country's timezone gets that country's (or
-    global) defaults, and Hong Kong, Macau and Taiwan always stay global."""
+    """A preset ISO's region applies where the chosen timezone names no
+    region, including UTC and other countries' timezones; Hong Kong, Macau and
+    Taiwan always stay global."""
     regions_dir = regions_dir or REGIONS_DIR
     region = region_for_timezone(timezone, regions_dir)
     if region != GLOBAL or not preset or timezone in NEVER_REGIONAL:
