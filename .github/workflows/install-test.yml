@@ -42,7 +42,7 @@ jobs:
       - id: vouch
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: mitchellh/vouch/action/check-user@f23dbb5e745334f97414ec70463ce7301071a661 # v1
+        uses: mitchellh/vouch/action/check-user@d66fa29a64600490892131ad87597c30c91fcac4 # v1
         with:
           user: ${{ github.event.pull_request.user.login }}
           allow-fail: true
