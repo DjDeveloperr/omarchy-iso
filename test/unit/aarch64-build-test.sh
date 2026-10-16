@@ -185,6 +185,10 @@ grep -Fq 'patch --batch --forward --fuzz=0 "$mkarchiso_command" </builder/archis
 # The installer asks the runtime's own detector which board it is on.
 grep -Fq 'install -Dm0644 "$hw_platform" "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-hw-platform"' "$ROOT/builder/build-iso.sh" \
   || fail "the image does not carry the runtime's platform detector"
+# A packaged runtime links /usr/share/omarchy/bin/* to /usr/bin, so the link
+# extracted on its own points nowhere.
+grep -Fq 'hw_platform=/tmp/omarchy-pkglists/usr/bin/omarchy-hw-platform' "$ROOT/builder/build-iso.sh" \
+  || fail "a build from published packages reads the detector through its link"
 
 # --- package sources ---------------------------------------------------------------
 # Arch Linux ARM's packages come from Omarchy's own mirror of them: for the
