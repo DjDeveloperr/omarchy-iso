@@ -10,13 +10,23 @@ on:
   # Each merge records quattro's numbers, which PR comments compare against.
   push:
     branches: [quattro]
+  # By hand, the ISO can be built from another package channel: rc builds a
+  # release candidate the way omarchy-release does (omarchy-iso-make --rc), to
+  # test a fresh install of it. rc and stable are x86_64 only; aarch64 builds
+  # from edge either way.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Package channel the x86_64 ISO is built from"
+        type: choice
+        options: [stable, rc, edge]
+        default: stable
 
 permissions:
   contents: read
 
 concurrency:
-  group: install-test-${{ github.event.pull_request.number || github.ref }}
+  group: install-test-${{ github.event.pull_request.number || github.ref }}-${{ inputs.channel || 'stable' }}
   cancel-in-progress: true
 
 jobs:
@@ -73,7 +83,8 @@ jobs:
         # A trusted author gets both architectures. Anyone else gets x86_64
         # on GitHub's runner. No cache of build output on either runner: what
         # one pull request leaves the next run would trust.
-        arch: ${{ fromJSON(needs.trust.outputs.trusted == 'true' && '["x86_64", "aarch64"]' || '["x86_64"]') }}
+        # A manual rc run is x86_64 only: no channel but edge serves aarch64.
+        arch: ${{ fromJSON(needs.trust.outputs.trusted == 'true' && inputs.channel != 'rc' && '["x86_64", "aarch64"]' || '["x86_64"]') }}
     # aarch64 runs on Linux on Apple Silicon: the ARM runners that have KVM.
     runs-on: ${{ needs.trust.outputs.trusted != 'true' && 'ubuntu-26.04' || matrix.arch == 'aarch64' && 'namespace-profile-arm64-linux-apple-12x32' || 'namespace-profile-linux-amd64-16x32' }}
     timeout-minutes: 75
@@ -109,7 +120,7 @@ jobs:
           if [[ ${{ matrix.arch }} == aarch64 ]]; then
             ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer --local-source src/omarchy src/omarchy-pkgs
           else
-            NO_BOOT_OFFER=1 ./bin/omarchy-iso-make
+            NO_BOOT_OFFER=1 ./bin/omarchy-iso-make ${{ inputs.channel == 'rc' && '--rc' || inputs.channel == 'edge' && '--edge' || '' }}
           fi
           mkdir -p test-runs && echo $(( $(date +%s) - start )) >test-runs/build-seconds
 
@@ -177,6 +188,8 @@ jobs:
           [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
             echo "## Install test"
+            echo
+            echo "Channel: \`${{ matrix.arch == 'aarch64' && 'edge' || inputs.channel || 'stable' }}\`"
             echo
             if [ -f "$base/omarchy-install-timing.json" ]; then
               jq -r '"**Install:** \((.finished_at - .started_at) * 10 | round / 10) s across \(.phases | length) phases"' "$base/omarchy-install-timing.json"
