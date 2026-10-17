@@ -20,7 +20,7 @@ bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/node-release.sh" "$ROOT/builder/arm64-kernel-image.sh" \
   "$ROOT/builder/n1x-dev-ssh/omarchy-n1x-dev-ssh" "$ROOT/configs/airootfs/root/.automated_script.sh"
 
-grep -Fq 'menci/archlinuxarm@sha256:' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest"
+grep -Eq '^ *CONTAINER_IMAGE=ghcr\.io/menci/archlinuxarm@sha256:[0-9a-f]{64}$' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest on ghcr.io"
 grep -Eq 'requires? (--package-dir DIR|the package bundle)' "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   && fail "an aarch64 build still requires a package bundle, though edge publishes linux-omarchy"
 grep -Fq 'ships no $required' "$ROOT/builder/build-iso.sh" || fail "a runtime without the platform support is not refused"

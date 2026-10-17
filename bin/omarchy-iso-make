@@ -141,8 +141,10 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
     fi
   fi
   # Pinned by digest: this container runs with the privileges archiso needs,
-  # so a mutable third-party tag is not acceptable.
-  CONTAINER_IMAGE=menci/archlinuxarm@sha256:3e1074c407fc1a57c2a2117af6920c96a7cc906fa6f1f2da8a4a7fd3aa2c2f4e
+  # so a mutable third-party tag is not acceptable. From GitHub's registry:
+  # the same build Menci pushes to Docker Hub, without Docker Hub's limit on
+  # anonymous pulls, which failed the aarch64 jobs with 429s.
+  CONTAINER_IMAGE=ghcr.io/menci/archlinuxarm@sha256:3e1074c407fc1a57c2a2117af6920c96a7cc906fa6f1f2da8a4a7fd3aa2c2f4e
   CONTAINER_PLATFORM_ARGS=(--platform linux/arm64)
 elif [[ -n $PACKAGE_DIR || -n $N1X_DEV_SSH_KEY ]]; then
   echo "Error: --package-dir and --dev-ssh are only valid with --arch aarch64" >&2
