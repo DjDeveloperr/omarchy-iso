@@ -115,6 +115,17 @@ facts() { # file
     echo "boot_id=$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
   ' 2>/dev/null | grep -E '^[a-z_]+=' >"$1"
 }
+# The shell's facts, asked once the desktop has drawn: before that the shell
+# may not have loaded the bar and menu. A palette that does not resolve leaves
+# them black while the shell still runs and answers, and logs each binding it
+# could not fill (Qt 6.12's Color singleton made 233 of them). Only those
+# count: a healthy shell logs other scene warnings too.
+shell_facts() { # file
+  guest '
+    echo "shell_running=$(pgrep -c -x quickshell)"
+    echo "shell_undefined_bindings=$(sudo journalctl -b -t omarchy-shell -q --no-pager 2>/dev/null | grep -cE "Unable to assign \[undefined\]|Cannot read property .* of undefined")"
+  ' 2>/dev/null | grep -E '^[a-z_]+=' >>"$1"
+}
 fact() { sed -n "s/^$2=//p" "$1" | head -n 1; }
 
 qemu-img create -qf qcow2 -b "$in/base.qcow2" -F qcow2 "$state/run.qcow2"
@@ -141,6 +152,7 @@ ssh "${ssh_opts[@]}" omarchy@127.0.0.1 'sudo -k; sudo -n true && sudo -n -v' </d
 guest 'timeout 180 systemctl is-system-running --wait >/dev/null 2>&1 || true'
 facts "$out/before.txt"
 desktop_shot "$out/before.png"
+shell_facts "$out/before.txt"
 log "Before: $(fact "$out/before.txt" omarchy), kernel $(fact "$out/before.txt" kernel), channel $(fact "$out/before.txt" channel)"
 
 for migration in ${EXTRA_MIGRATIONS:-}; do
@@ -215,6 +227,7 @@ if [[ $rebooted != no ]]; then
   guest 'timeout 180 systemctl is-system-running --wait >/dev/null 2>&1 || true'
   facts "$out/after.txt"
   desktop_shot "$out/after.png"
+  shell_facts "$out/after.txt"
 else
   : >"$out/after.txt"
   qmp shot "$out/after.png" || true
@@ -243,6 +256,8 @@ failed="$(a failed_units) $(a failed_user_units)"
 failed=$(xargs <<<"$failed")
 check "No failed units (${failed:-none})" test -z "$failed"
 check "The desktop is up (Hyprland processes: $(a hyprland_running))" test "$(a hyprland_running)" = 1
+check "The shell drew its theme (Quickshell processes: $(a shell_running); undefined bindings: $(b shell_undefined_bindings) → $(a shell_undefined_bindings))" \
+  test -n "$(a shell_running)" -a "$(a shell_running)" != 0 -a "$(a shell_undefined_bindings)" = 0
 # The same picture, whatever format and place it is kept in now: an update may
 # convert the bundled images or renumber them (0-winding-road.jpg became
 # 1-winding-road.webp), and may not swap the one the user chose for another.
