@@ -10,7 +10,7 @@ set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # One place names the image: the build.
-image=$(sed -n 's/^ *CONTAINER_IMAGE=\(menci\/archlinuxarm@sha256:[0-9a-f]*\)$/\1/p' "$here/bin/omarchy-iso-make")
+image=$(sed -n 's/^ *CONTAINER_IMAGE=\(ghcr\.io\/menci\/archlinuxarm@sha256:[0-9a-f]*\)$/\1/p' "$here/bin/omarchy-iso-make")
 : "${image:?bin/omarchy-iso-make names no Arch Linux ARM image}"
 
 docker=(docker)
