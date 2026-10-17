@@ -32,7 +32,7 @@ done
 grep -Fq 'sha256sum --check --strict --quiet SHA256SUMS' "$ROOT/bin/omarchy-iso-make" || fail "bundle checksums are not verified on the host"
 grep -Fq -- '-v "$PACKAGE_DIR:/packages:ro"' "$ROOT/bin/omarchy-iso-make" || fail "bundle is not mounted read-only at /packages"
 grep -Fq 'OMARCHY_ARCH == x86_64 && -d /var/cache/pacman/pkg' "$ROOT/bin/omarchy-iso-make" || fail "host pacman cache would leak into aarch64 builds"
-grep -Fq 'builds use the edge channel' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 builds must be pinned to the edge channel"
+grep -Fq 'builds use the edge or rc channel' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 builds must use the edge or rc channel"
 grep -Fq 'OMARCHY_KERNEL=linux-omarchy' "$ROOT/bin/omarchy-iso-make" || fail "an aarch64 image does not boot linux-omarchy"
 grep -Fq -- '--kernel' "$ROOT/bin/omarchy-iso-make" && fail "an aarch64 build still offers a choice of kernel"
 grep -Fq 'OMARCHY_ARM_PLATFORM' "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" && fail "an aarch64 build still asks which board it is for"
@@ -54,6 +54,17 @@ grep -Fq '"$mkarchiso_command" -v -w' "$ROOT/builder/build-iso.sh" || fail "buil
 repos=$(grep -E '^\[|^Server' "$ROOT/configs/pacman-online-aarch64.conf" | grep -v '^\[options\]' | paste -sd' ')
 [[ $repos == '[platform] Server = file:///packages [omarchy] Server = https://pkgs.omarchy.org/edge/$arch [core]'* ]] \
   || fail "aarch64 repository order is wrong: $repos"
+# An rc build takes [omarchy] from rc and leaves Arch Linux ARM's servers alone.
+rewrite=$(grep -F 'sed -i "s|^Server = https://pkgs\.omarchy\.org/edge/|' "$ROOT/builder/build-iso.sh")
+[[ -n $rewrite ]] || fail "an rc aarch64 build keeps edge's [omarchy] server"
+rc_conf=$(mktemp)
+cp "$ROOT/configs/pacman-online-aarch64.conf" "$rc_conf"
+(OMARCHY_MIRROR=rc online_pacman_conf=$rc_conf; eval "$rewrite")
+grep -Fqx 'Server = https://pkgs.omarchy.org/rc/$arch' "$rc_conf" || fail "an rc aarch64 build does not use the rc [omarchy] server"
+grep -Fq 'pkgs.omarchy.org/edge/' "$rc_conf" && fail "an rc aarch64 build still reaches edge"
+diff <(grep -v 'pkgs.omarchy.org' "$ROOT/configs/pacman-online-aarch64.conf") <(grep -v 'pkgs.omarchy.org' "$rc_conf") >/dev/null \
+  || fail "the rc rewrite changed more than the [omarchy] server"
+rm -f "$rc_conf"
 grep -Fq 'repo-add -q "$bundle_index/platform.db.tar.gz"' "$ROOT/builder/build-iso.sh" || fail "bundle is not indexed as the [platform] repo"
 grep -Fq 'arch="${OMARCHY_ARCH:-x86_64}"' "$ROOT/configs/profiledef.sh" || fail "profiledef ignores OMARCHY_ARCH"
 
@@ -143,7 +154,8 @@ make_refuses() { # expected message, then arguments
   out=$(cd "$ROOT" && bash bin/omarchy-iso-make "$@" 2>&1) && fail "omarchy-iso-make $* was accepted"
   grep -Fq -- "$want" <<<"$out" || fail "omarchy-iso-make $*: expected '$want', got: $out"
 }
-make_refuses 'builds use the edge channel' --arch aarch64
+make_refuses 'builds use the edge or rc channel' --arch aarch64
+make_refuses 'package directory not found' --arch aarch64 --rc --package-dir /nonexistent
 make_refuses 'package directory not found' --arch aarch64 --edge --package-dir /nonexistent
 make_refuses 'Unknown option: --kernel' --arch aarch64 --edge --kernel linux-aarch64
 make_refuses 'only valid with --arch aarch64' --package-dir /tmp
