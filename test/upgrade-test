@@ -243,11 +243,13 @@ failed="$(a failed_units) $(a failed_user_units)"
 failed=$(xargs <<<"$failed")
 check "No failed units (${failed:-none})" test -z "$failed"
 check "The desktop is up (Hyprland processes: $(a hyprland_running))" test "$(a hyprland_running)" = 1
-# The same picture, whatever format it is kept in now: an update may convert
-# the bundled images, and may not swap the one the user chose for another.
+# The same picture, whatever format and place it is kept in now: an update may
+# convert the bundled images or renumber them (0-winding-road.jpg became
+# 1-winding-road.webp), and may not swap the one the user chose for another.
+picture() { local name=${1%.*}; [[ $name =~ ^[0-9]+-(.+)$ ]] && name=${BASH_REMATCH[1]}; printf '%s' "$name"; }
 before_wallpaper=$(b wallpaper) after_wallpaper=$(a wallpaper)
 check "The wallpaper is the one the user had, and exists ($before_wallpaper → $after_wallpaper)" \
-  test "$(a wallpaper_exists)" = yes -a -n "$after_wallpaper" -a "${after_wallpaper%.*}" = "${before_wallpaper%.*}"
+  test "$(a wallpaper_exists)" = yes -a -n "$after_wallpaper" -a "$(picture "$after_wallpaper")" = "$(picture "$before_wallpaper")"
 check "The boot menu has one Omarchy group ($(a boot_entry_groups))" test "$(a boot_entry_groups)" = 1
 
 row() { printf '| %s | %s | %s |\n' "$1" "$(b "$2")" "$(a "$2")"; }
