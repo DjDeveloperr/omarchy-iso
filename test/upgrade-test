@@ -182,7 +182,11 @@ fi
 
 log "omarchy-channel-set $channel"
 update_start=$SECONDS
-guest "timeout ${UPDATE_TIMEOUT:-1800} omarchy-channel-set $channel" >"$out/update.log" 2>&1
+# omarchy-channel-set runs omarchy-update -y, which wraps itself in script(1)
+# for its log. Up to 4.0.x the orphan and reboot questions take that terminal
+# as a person to ask, despite -y, and wait for an answer until the timeout.
+# Already logged, the update has no terminal and they report and move on.
+guest "timeout ${UPDATE_TIMEOUT:-1800} env OMARCHY_UPDATE_LOGGED=1 omarchy-channel-set $channel" >"$out/update.log" 2>&1
 update_status=$?
 update_seconds=$(( SECONDS - update_start ))
 sed -i 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\r/\n/g' "$out/update.log"
