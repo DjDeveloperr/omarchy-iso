@@ -29,10 +29,11 @@ objcopy -j .text -j .sdata -j .data -j .dynamic -j .rodata -j .rel -j .rela -j '
   -j .areloc -j .reloc -O efi-bsdrv-aarch64 "$work/n1x-firmware.so" "$work/n1x-firmware.efi"
 
 # An EFI expansion ROM header, the PCI data structure, then the driver: UEFI
-# 2.10 section 14.4.21 (tables 14.16 and 14.18), PCI Local Bus 2.2 section
-# 6.3.1.2. The firmware reads the image type, machine and subsystem from the
-# header and checks the driver's own against them. The data structure names
-# the RNG the ROM rides on: QEMU's virtio-rng-pci, class 0x00ff00.
+# 2.10 sections 14.4.21 to 14.4.23 (tables 14.16 and 14.18), PCI Local Bus 2.2
+# section 6.3.1.2. The firmware reads the image type, machine and subsystem
+# from the header and checks the driver's own against them. The data
+# structure names the RNG the ROM rides on: QEMU's virtio-rng-pci, class
+# 0x00ff00.
 python3 - "$work/n1x-firmware.efi" "$rom" <<'PY'
 import struct, sys
 efi = open(sys.argv[1], "rb").read()
