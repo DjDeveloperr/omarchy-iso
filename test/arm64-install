@@ -68,10 +68,6 @@ jq --arg kernel "${KERNEL:-linux-omarchy}" --arg mirror "${MIRROR:-https://arm-m
   | .kernels = [$kernel]
   | .mirror_config.custom_servers = [{url: $mirror}]' "$answers" >"$answers.new"
 mv "$answers.new" "$answers"
-# The live ISO runs cloud-init, and a CIDATA volume is where it looks. This
-# gives the test a way in to the live system, to see why an install stopped.
-printf 'instance-id: arm64-install\nlocal-hostname: archiso\n' >"$state/cidata/meta-data"
-printf '#cloud-config\nusers:\n  - name: root\n    ssh_authorized_keys:\n      - %s\n' "$(cat "$SSH_KEY.pub")" >"$state/cidata/user-data"
 rm -f "$CIDATA_IMG"
 truncate -s 4M "$CIDATA_IMG"
 mkfs.vfat -n CIDATA "$CIDATA_IMG" >/dev/null
@@ -123,21 +119,9 @@ screen() { # file -> the text on the screen
   qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":\"$1\",\"format\":\"png\"}}" 2>/dev/null || return 0
   tesseract "$1" - 2>/dev/null | grep -v '^\s*$' || true
 }
-login() { # user, then a command: the live system as root, the installed one as the user
+guest() { # a command, run on the installed system as its user
   ssh -n -i "$SSH_KEY" -p "$port" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3 -o LogLevel=ERROR "$1@127.0.0.1" "${@:2}"
-}
-guest() { login "$GUEST_USER" "$@"; }
-live() { login root "$@"; }
-# Why an install stopped: the installer's own log, kept and shown.
-installer_log() {
-  live 'cat /var/log/omarchy-install.log' 2>/dev/null | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' >"$out/omarchy-install.log" || true
-  if [[ -s $out/omarchy-install.log ]]; then
-    echo "arm64-install: the installer's log ends:" >&2
-    grep -av '^\s*$' "$out/omarchy-install.log" | tail -n 25 | cut -c1-200 >&2
-  else
-    echo "arm64-install: the live system gave no installer log" >&2
-  fi
+    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3 -o LogLevel=ERROR "$GUEST_USER@127.0.0.1" "$@"
 }
 
 # --- install and first boot ------------------------------------------------
@@ -150,19 +134,20 @@ until guest true 2>/dev/null; do
   fi
   if (( elapsed > timeout )); then
     screen "$out/shots/timeout.png" | tail -n 12 >&2
-    installer_log
     echo "arm64-install: no installed system on SSH after $timeout s" >&2; exit 1
   fi
-  # The installer says so in its log when it stops, and it leaves the live
-  # system up. Without this the wait above runs to its timeout on a dead install.
-  if halted=$(live 'grep -a -m1 -E "Installation halted|installer child exited with status [1-9]" /var/log/omarchy-install.log' 2>/dev/null); then
-    screen "$out/shots/halted.png" >/dev/null
-    installer_log
-    echo "arm64-install: the installer stopped after $elapsed s: $halted" >&2; exit 1
-  fi
   if (( ++tick % 2 == 0 )); then
-    text=$(screen "$out/shots/$(printf '%04d' "$elapsed").png")
+    shot=$out/shots/$(printf '%04d' "$elapsed").png
+    text=$(screen "$shot")
     echo "  $elapsed s: $(tail -n 2 <<<"$text" | tr '\n' ' ' | cut -c1-120)"
+    # When the installer stops it says so on its screen, above the last lines
+    # of its log, and leaves the live system up: the x86_64 test reads the same
+    # screen. Without this the wait runs to its timeout on a dead install.
+    if grep -qiE 'installation stopped|exited with status' <<<"$text"; then
+      cp "$shot" "$out/shots/halted.png"
+      echo "$text" >&2
+      echo "arm64-install: the installer stopped after $elapsed s (shots/halted.png)" >&2; exit 1
+    fi
     if grep -qi 'Reboot Now' <<<"$text"; then
       echo "  $elapsed s: the installer is done; rebooting"
       qmp '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"ret"}]}}'
