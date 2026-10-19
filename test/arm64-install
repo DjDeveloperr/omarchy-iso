@@ -189,6 +189,11 @@ check() { # description, then a command run in the guest that must succeed
   check "packages come from Omarchy's mirror and nowhere else" \
     "grep -q '^Server.*omarchy\.org' /etc/pacman.d/mirrorlist && ! grep '^Server' /etc/pacman.d/mirrorlist | grep -vq 'omarchy\.org'"
   if [[ -n ${PLATFORM:-} ]]; then
+    # The machine's own word for what it is, which every platform-specific
+    # step of the install and of the system after it goes by.
+    said=$(guest omarchy-hw-platform 2>&1) || true
+    check "Omarchy's detector names it $PLATFORM (it says ${said:-nothing})" \
+      "[ \"\$(omarchy-hw-platform)\" = $PLATFORM ]"
     check "the installer took the $PLATFORM default set" \
       "echo $GUEST_PASSWORD | sudo -S -p '' grep -aq 'omarchy-base.$PLATFORM.packages' /var/log/omarchy-install.log"
   fi
