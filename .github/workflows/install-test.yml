@@ -13,7 +13,7 @@ on:
   # By hand, the ISO can be built from another package channel: rc builds a
   # release candidate the way omarchy-release does (omarchy-iso-make --rc), to
   # test a fresh install of it, on both architectures. stable is x86_64 only;
-  # aarch64 builds from quattro's source and edge for every other channel.
+  # aarch64 builds from the edge channel for every other channel.
   workflow_dispatch:
     inputs:
       channel:
@@ -103,23 +103,17 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: matrix.arch == 'x86_64'
 
-      # aarch64 builds from omarchy's quattro and omarchy-pkgs' master, as the
-      # x86_64 ISO does from this branch, on linux-omarchy from edge: the one
-      # kernel for every aarch64 board. An rc run builds from the rc channel.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: matrix.arch == 'aarch64' && inputs.channel != 'rc'
-        with: { repository: omacom/omarchy, ref: quattro, path: src/omarchy, fetch-depth: 0, persist-credentials: false }
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: matrix.arch == 'aarch64' && inputs.channel != 'rc'
-        with: { repository: omacom/omarchy-pkgs, ref: master, path: src/omarchy-pkgs, persist-credentials: false }
-
+      # aarch64 installs what the edge channel serves, as the nightly does, on
+      # linux-omarchy: the one kernel for every aarch64 board. Every package
+      # comes from the package repositories, none is built here. An rc run
+      # builds from the rc channel.
       - name: Build the ISO
         run: |
           start=$(date +%s)
           if [[ ${{ matrix.arch }} == aarch64 && '${{ inputs.channel }}' == rc ]]; then
             ./bin/omarchy-iso-make --arch aarch64 --rc --no-boot-offer
           elif [[ ${{ matrix.arch }} == aarch64 ]]; then
-            ./bin/omarchy-iso-make --arch aarch64 --no-boot-offer --local-source src/omarchy src/omarchy-pkgs
+            ./bin/omarchy-iso-make --arch aarch64 --edge --no-boot-offer
           else
             NO_BOOT_OFFER=1 ./bin/omarchy-iso-make ${{ inputs.channel == 'rc' && '--rc' || inputs.channel == 'edge' && '--edge' || '' }}
           fi
