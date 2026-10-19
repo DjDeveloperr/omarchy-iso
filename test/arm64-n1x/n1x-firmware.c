@@ -15,7 +15,7 @@
 
 #include "nvda0200.hex" /* nvda0200_aml_code[], from iasl -tc */
 
-/* EFI_ACPI_TABLE_PROTOCOL, UEFI 2.10 section 20.2. */
+/* EFI_ACPI_TABLE_PROTOCOL, UEFI 2.10 section 20.1. */
 static EFI_GUID acpi_table_guid = {
 	0xffe06bdd, 0x6107, 0x46a6, { 0x7b, 0xb2, 0x5a, 0x9c, 0x7e, 0xc5, 0x27, 0x5c }
 };

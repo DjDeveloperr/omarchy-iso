@@ -29,9 +29,10 @@ objcopy -j .text -j .sdata -j .data -j .dynamic -j .rodata -j .rel -j .rela -j '
   -j .areloc -j .reloc -O efi-bsdrv-aarch64 "$work/n1x-firmware.so" "$work/n1x-firmware.efi"
 
 # An EFI expansion ROM header, the PCI data structure, then the driver: UEFI
-# 2.10 section 14.4.2, PCI Local Bus 2.2 section 6.3.1.2. The firmware reads
-# the image type, machine and subsystem from the header and checks the
-# driver's own against them.
+# 2.10 section 14.4.21 (tables 14.16 and 14.18), PCI Local Bus 2.2 section
+# 6.3.1.2. The firmware reads the image type, machine and subsystem from the
+# header and checks the driver's own against them. The data structure names
+# the RNG the ROM rides on: QEMU's virtio-rng-pci, class 0x00ff00.
 python3 - "$work/n1x-firmware.efi" "$rom" <<'PY'
 import struct, sys
 efi = open(sys.argv[1], "rb").read()
@@ -42,7 +43,7 @@ assert (machine, subsystem) == (0xAA64, 11), "not an aarch64 boot-service driver
 offset = 0x40
 blocks = -(-(offset + len(efi)) // 512)
 header = struct.pack("<HHIHHH8xHH", 0xAA55, blocks, 0x0EF1, subsystem, machine, 0, offset, 0x1C)
-pcir = struct.pack("<4sHHHHB3sHHBBH", b"PCIR", 0x1AF4, 0x1005, 0, 0x18, 0, bytes(3), blocks, 0, 3, 0x80, 0)
+pcir = struct.pack("<4sHHHHB3sHHBBH", b"PCIR", 0x1AF4, 0x1005, 0, 0x18, 0, b"\x00\xff\x00", blocks, 0, 3, 0x80, 0)
 rom = (header.ljust(0x1C, b"\0") + pcir).ljust(offset, b"\0") + efi
 open(sys.argv[2], "wb").write(rom.ljust(blocks * 512, b"\0"))
 PY
