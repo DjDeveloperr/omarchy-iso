@@ -11,14 +11,16 @@
 # architecture shows: Limine's binary, the kernel, the mirror.
 #
 # Needs an arm64 host with a usable /dev/kvm, qemu-system-aarch64, the AAVMF
-# firmware, mtools, dosfstools, jq, openssl and tesseract. evidence_dir gets
-# the serial log, screenshots, the installer's log and the checks' output.
+# firmware, mtools, dosfstools, jq, openssl and tesseract, and for PLATFORM
+# what test/arm64-n1x/make-rom needs. evidence_dir gets the serial log,
+# screenshots, the installer's log and the checks' output.
 #
 # Env: TIMEOUT (seconds for install and first boot, default 1500), SMP (8),
 #      MEM (12G), MACHINE (virt with ACPI; test/arm64-live-boot says why the GIC
 #      is set as it is), KERNEL (linux-omarchy),
-#      PLATFORM (the platform the live system's detector is made to name,
-#      for the default set and drivers of a machine a VM cannot be: aarch64-n1x),
+#      PLATFORM (aarch64-n1x: the VM's firmware carries what Omarchy reads
+#      from an NVIDIA N1x's, test/arm64-n1x, so Omarchy's own detector names
+#      the machine one and installs and sets it up as one),
 #      MIRROR (where the installed system gets Arch Linux ARM's packages:
 #      Omarchy's own mirror of them).
 set -euo pipefail
@@ -30,6 +32,7 @@ mkdir -p "$out/shots"
 
 [[ $(uname -m) == aarch64 ]] || { echo "arm64-install: this needs an arm64 host" >&2; exit 1; }
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "arm64-install: /dev/kvm is not usable" >&2; exit 1; }
+[[ ${PLATFORM:-aarch64-n1x} == aarch64-n1x ]] || { echo "arm64-install: PLATFORM can only be aarch64-n1x" >&2; exit 2; }
 for firmware in /usr/share/AAVMF/AAVMF_CODE.fd:/usr/share/AAVMF/AAVMF_VARS.fd \
   /usr/share/edk2/aarch64/QEMU_CODE.fd:/usr/share/edk2/aarch64/QEMU_VARS.fd; do
   [[ -f ${firmware%%:*} && -f ${firmware##*:} ]] && { code=${firmware%%:*}; vars=${firmware##*:}; break; }
@@ -69,11 +72,6 @@ mv "$answers.new" "$answers"
 # gives the test a way in to the live system, to see why an install stopped.
 printf 'instance-id: arm64-install\nlocal-hostname: archiso\n' >"$state/cidata/meta-data"
 printf '#cloud-config\nusers:\n  - name: root\n    ssh_authorized_keys:\n      - %s\n' "$(cat "$SSH_KEY.pub")" >"$state/cidata/user-data"
-# A VM has none of the hardware Omarchy's detector looks for. Given a
-# platform, the live system's copy of it is replaced, before the installer
-# asks, by one that names it.
-[[ -z ${PLATFORM:-} ]] || printf 'write_files:\n  - path: /usr/share/omarchy-iso/omarchy-hw-platform\n    content: |\n      echo %s\n' \
-  "$PLATFORM" >>"$state/cidata/user-data"
 rm -f "$CIDATA_IMG"
 truncate -s 4M "$CIDATA_IMG"
 mkfs.vfat -n CIDATA "$CIDATA_IMG" >/dev/null
@@ -81,6 +79,13 @@ mcopy -i "$CIDATA_IMG" "$state"/cidata/* ::/
 cp "$answers" "$out/user_configuration.json"
 
 # --- machine ---------------------------------------------------------------
+# An N1x's firmware describes its NVDA0200 I2C controllers in ACPI and has the
+# GPU memory variable; this VM's gets both from an option ROM on its RNG.
+rng=virtio-rng-pci
+if [[ -n ${PLATFORM:-} ]]; then
+  "$ROOT/test/arm64-n1x/make-rom" "$state/n1x.rom"
+  rng+=",romfile=$state/n1x.rom"
+fi
 port=$(( 20000 + RANDOM % 10000 ))
 qemu-img create -q -f qcow2 "$state/target.qcow2" 40G
 cp "$vars" "$state/vars.fd"
@@ -98,7 +103,7 @@ qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,msi=gicv2m,acpi=on}"
   -device scsi-cd,drive=iso,bootindex=1 \
   -device qemu-xhci -device usb-kbd -device usb-tablet \
   -drive "file=$CIDATA_IMG,format=raw,if=none,id=cidata" -device usb-storage,drive=cidata \
-  -device virtio-gpu-pci -device virtio-rng-pci \
+  -device virtio-gpu-pci -device "$rng" \
   -netdev "user,id=net,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=net \
   -serial "file:$out/serial.log" -display none \
   -qmp "unix:$state/qmp.sock,server,nowait" -pidfile "$state/qemu.pid" -daemonize

@@ -24,7 +24,7 @@ docker version >/dev/null 2>&1 || docker=(sudo docker)
   for attempt in 1 2 3; do
     pacman -Syu --noconfirm --needed qemu-system-aarch64 qemu-hw-display-virtio-gpu qemu-hw-display-virtio-gpu-pci \
       qemu-img mtools dosfstools jq openssl openssh \
-      python tesseract tesseract-data-eng libarchive curl >/dev/null && break
+      python tesseract tesseract-data-eng libarchive curl ${PLATFORM:+acpica gnu-efi gcc binutils} >/dev/null && break
     [ "$attempt" -lt 3 ] || { echo "arm64-container: could not install the test tools" >&2; exit 1; }
     sleep 15
   done
