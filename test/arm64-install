@@ -15,7 +15,8 @@
 # the serial log, screenshots, the installer's log and the checks' output.
 #
 # Env: TIMEOUT (seconds for install and first boot, default 1500), SMP (8),
-#      MEM (12G), MACHINE (see test/arm64-live-boot), KERNEL (linux-omarchy),
+#      MEM (12G), MACHINE (virt with ACPI; test/arm64-live-boot says why the GIC
+#      is set as it is), KERNEL (linux-omarchy),
 #      PLATFORM (the platform the live system's detector is made to name,
 #      for the default set and drivers of a machine a VM cannot be: aarch64-n1x),
 #      MIRROR (where the installed system gets Arch Linux ARM's packages:
@@ -85,8 +86,11 @@ qemu-img create -q -f qcow2 "$state/target.qcow2" 40G
 cp "$vars" "$state/vars.fd"
 : >"$out/serial.log"
 # The empty disk is first in the boot order: the firmware falls through to the
-# ISO now and finds Limine there after the install.
-qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,msi=gicv2m,acpi=off}" -accel kvm -cpu host \
+# ISO now and finds Limine there after the install. The machine is described to
+# what it boots by ACPI, as an N1x laptop or an Arm server is, so no device tree
+# is passed and MSIs reach the GICv2m through the MADT's MSI frame.
+# test/arm64-live-boot boots the ISO with the device tree.
+qemu-system-aarch64 -machine "${MACHINE:-virt,gic-version=3,msi=gicv2m,acpi=on}" -accel kvm -cpu host \
   -smp "${SMP:-8}" -m "${MEM:-12G}" \
   -drive "if=pflash,format=raw,readonly=on,file=$code" -drive "if=pflash,format=raw,file=$state/vars.fd" \
   -drive "file=$state/target.qcow2,format=qcow2,if=none,id=target" -device virtio-blk-pci,drive=target,bootindex=0 \
