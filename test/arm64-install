@@ -55,11 +55,14 @@ trap cleanup EXIT
 # --- answers ---------------------------------------------------------------
 GUEST_USER=omarchy GUEST_PASSWORD=omarchy GUEST_HOSTNAME=omarchy-arm64
 BASE_DIR=$state SSH_KEY=$state/id_ed25519 CIDATA_IMG=$state/cidata.img
-RUNTIME_PACKAGE=omarchy-dev SETTINGS_PACKAGE=omarchy-settings-dev
 ssh-keygen -q -t ed25519 -N '' -C arm64-install -f "$SSH_KEY"
-# The harness's own function, so the two cannot drift apart. It ends by
-# writing the image; the architecture's answers are changed and it is redone.
+# The harness's own functions, so the two cannot drift apart: detect_packages
+# names the runtime the ISO's channel installs (omarchy-dev on edge, omarchy on
+# rc and stable), and build_cidata ends by writing the image; the
+# architecture's answers are changed and it is redone.
+eval "$(sed -n '/^detect_packages() {$/,/^}$/p' "$ROOT/test/integration.d/base-test.sh")"
 eval "$(sed -n '/^build_cidata() {$/,/^  mcopy -i "\$CIDATA_IMG"/p' "$ROOT/test/integration.d/base-test.sh"; echo '}')"
+ISO=$iso detect_packages
 build_cidata
 answers=$state/cidata/user_configuration.json
 jq --arg kernel "${KERNEL:-linux-omarchy}" --arg mirror "${MIRROR:-https://arm-mirror.omarchy.org/\$arch/\$repo}" '
