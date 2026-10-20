@@ -17,7 +17,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/aarch64-package-filter.sh" "$ROOT/builder/grub-platform.sh" \
   "$ROOT/builder/archiso-aarch64-mkinitcpio.sh" "$ROOT/builder/archiso-aarch64-grub-modules.sh" \
-  "$ROOT/builder/arm64-kernel-image.sh" \
+  "$ROOT/builder/node-release.sh" "$ROOT/builder/arm64-kernel-image.sh" \
   "$ROOT/builder/n1x-dev-ssh/omarchy-n1x-dev-ssh" "$ROOT/configs/airootfs/root/.automated_script.sh"
 
 grep -Eq '^ *CONTAINER_IMAGE=ghcr\.io/menci/archlinuxarm@sha256:[0-9a-f]{64}$' "$ROOT/bin/omarchy-iso-make" || fail "aarch64 container is not pinned by digest on ghcr.io"

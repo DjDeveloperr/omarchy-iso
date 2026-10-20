@@ -1099,7 +1099,8 @@ def _debug_run(ctx: InstallContext, cmd: list[str]) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Target setup phases:
 #  1. point the target at the offline pacman.conf
-#  2. bind-mount the offline mirror into /mnt for target pacman
+#  2. bind-mount the offline mirror into /mnt for target pacman, and the
+#     bundled Node for a runtime from before Omarchy installed Node lazily
 #  3. arch-chroot as root → omarchy-apply-system --first-install
 #  4. arch-chroot as user → omarchy-provision-user --first-install
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1113,6 +1114,9 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
     bind_mounts = [
         ("/var/cache/omarchy/mirror/offline", "/var/cache/omarchy/mirror/offline"),
     ]
+    # build-iso.sh bundles Node only for a runtime whose setup still unpacks it.
+    if Path("/opt/packages").is_dir():
+        bind_mounts.append(("/opt/packages", "/opt/packages"))
     ctx.state.setdefault("bind_mounts", [])
     mounted = set(ctx.state["bind_mounts"])
     for src, dst in bind_mounts:

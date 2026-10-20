@@ -174,8 +174,9 @@ check() { # description, then a command run in the guest that must succeed
   check "it booted through Limine's unified kernel image" \
     "echo $GUEST_PASSWORD | sudo -S -p '' sh -c 'ls /boot/EFI/Linux/omarchy_*.efi'"
   check "the Omarchy runtime is installed" "pacman -Q $RUNTIME_PACKAGE"
-  check "Node waits for its first use, as a lazy mise tool" \
-    '[ -x ~/.local/share/mise/shims/node ] && [ ! -d ~/.local/share/mise/installs/node ]'
+  # A runtime from before lazy Node unpacked the one the ISO bundled for it.
+  check "Node waits for its first use, or came from the ISO for this architecture" \
+    'node=$(ls ~/.local/share/mise/installs/node/*/bin/node 2>/dev/null | head -n 1); if [ -n "$node" ]; then file -bL "$node" | grep -q aarch64; else [ -x ~/.local/share/mise/shims/node ]; fi'
   check "packages come from Omarchy's mirror and nowhere else" \
     "grep -q '^Server.*omarchy\.org' /etc/pacman.d/mirrorlist && ! grep '^Server' /etc/pacman.d/mirrorlist | grep -vq 'omarchy\.org'"
   if [[ -n ${PLATFORM:-} ]]; then
