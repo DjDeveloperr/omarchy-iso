@@ -185,9 +185,15 @@ class PresetTest(unittest.TestCase):
         registry.write_text(json.dumps({"en": {}, "zh-CN": {}}))
         for language in (None, "", "zh-CN"):
             context.validate_language(language, registry)
-        for language in ("zh_CN", "xx", "../zh-CN", "zh-CN; reboot", 7, ["zh-CN"]):
+        for language in ("zh_CN", "xx", "../zh-CN", "zh-CN; reboot", "zh-CN\n", 7, ["zh-CN"]):
             with self.subTest(language=language), self.assertRaises(RuntimeError):
                 context.validate_language(language, registry)
+
+    def test_without_a_registry_only_english_is_accepted(self):
+        missing = self.root / "missing.json"
+        context.validate_language("en", missing)
+        with self.assertRaises(RuntimeError):
+            context.validate_language("zh-CN", missing)
 
     def from_env(self, config: dict, preset: dict | None) -> context.InstallContext:
         preset_path = self.root / "preset.json"
@@ -219,6 +225,8 @@ class PresetTest(unittest.TestCase):
         self.assertNotIn("region", self.from_env({"timezone": "UTC", "omarchy_install": {"region": "cn"}}, china).omarchy_install["form_defaults"])
         ctx = self.from_env({"timezone": "UTC", "omarchy_install": {"language": "da", "region": "global"}}, china)
         self.assertEqual((ctx.region, ctx.omarchy_install["language"]), ("global", "da"))
+        # English picked in the installer's language picker overrides the preset's language.
+        self.assertEqual(self.from_env({"timezone": "Asia/Shanghai", "omarchy_install": {"language": "en"}}, china).omarchy_install["language"], "en")
         self.assertEqual(self.from_env({"timezone": "Asia/Taipei"}, china).region, "global")
         ctx = self.from_env({"timezone": "UTC"}, None)
         self.assertEqual((ctx.region, ctx.omarchy_install.get("language"), ctx.omarchy_install["form_defaults"]), ("global", None, {}))
@@ -231,10 +239,17 @@ class PresetTest(unittest.TestCase):
             "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai\nKEYBOARD=evil", "region": "cn"}}))
         self.assertEqual((target / "etc/omarchy/form-defaults").read_text(), "KEYBOARD=Chinese (Simplified, Pinyin)\nREGION=cn\n")
 
-    def test_language_marker_is_written_only_for_a_preset(self):
+    def test_preset_takes_the_language_pickers_keys(self):
+        # The installer's language picker reads the same file, and its own key is not the orchestrator's to read.
+        preset_path = self.root / "preset.json"
+        preset_path.write_text(json.dumps({"language": "zh-CN", "language_prompt": False, "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai", "region": "cn"}))
+        self.assertEqual(context.load_preset(preset_path), {"language": "zh-CN", "keyboard": "Chinese (Simplified, Pinyin)", "timezone": "Asia/Shanghai", "region": "cn"})
+
+    def test_language_marker_is_written_only_for_a_language_other_than_english(self):
         target = self.root / "target"
-        phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install={}))
-        self.assertFalse((target / "etc/omarchy/language").exists())
+        for omarchy_install in ({}, {"language": ""}, {"language": "en"}):
+            phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install=omarchy_install))
+            self.assertFalse((target / "etc/omarchy/language").exists())
         phases_impl._write_language_marker(types.SimpleNamespace(target=target, omarchy_install={"language": "zh-CN"}))
         marker = target / "etc/omarchy/language"
         self.assertEqual(marker.read_text(), "zh-CN\n")

@@ -338,8 +338,8 @@ def arch_install_system(ctx: InstallContext) -> None:
             info(f"› installing Omarchy runtime + {base_pkgs_file.name}")
             installer.add_additional_packages(_runtime_package_list(ctx, base_pkgs_file))
 
-            _write_region_marker(ctx)
             _write_language_marker(ctx)
+            _write_region_marker(ctx)
             _write_form_defaults(ctx)
 
             # Tailscale is bundled in the offline mirror but only installed
@@ -822,18 +822,6 @@ def _write_region_marker(ctx: InstallContext) -> None:
     marker.chmod(0o644)
 
 
-def _write_language_marker(ctx: InstallContext) -> None:
-    """Hand a preset desktop language to the runtime's finalizers, which
-    generate its locale and set it per user. No preset writes nothing."""
-    language = ctx.omarchy_install.get("language")
-    if not language:
-        return
-    marker = ctx.target / "etc/omarchy/language"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(language + "\n")
-    marker.chmod(0o644)
-
-
 def _write_form_defaults(ctx: InstallContext) -> None:
     """Leave preset media's keyboard and timezone for a first-boot owner
     setup to preselect, as plain KEY=value data. No preset writes nothing."""
@@ -855,6 +843,19 @@ def _base_package_file(share: Path = Path("/usr/share/omarchy-iso")) -> Path:
     if detected and platform_list.is_file():
         return platform_list
     return share / "omarchy-base.packages"
+
+
+def _write_language_marker(ctx: InstallContext) -> None:
+    """Hand the installer's language to the runtime's finalizers, which
+    generate its locale and set it per user. English writes nothing, so an
+    English install stays exactly what it was."""
+    language = ctx.omarchy_install.get("language")
+    if not language or language == "en":
+        return
+    marker = ctx.target / "etc/omarchy/language"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(language + "\n")
+    marker.chmod(0o644)
 
 
 def _runtime_package_list(ctx: InstallContext, base_pkgs_file: Path | None = None) -> list[str]:

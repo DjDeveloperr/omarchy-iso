@@ -6,8 +6,8 @@ from __future__ import annotations
 import platform
 
 import json
-import re
 import os
+import re
 import secrets
 import subprocess
 from dataclasses import dataclass, field
@@ -18,30 +18,34 @@ from .keyboard import validate_input_selection
 from .region import GLOBAL, region_for_timezone, resolve_region
 
 LANGUAGES = Path("/usr/share/omarchy/default/i18n/locales.json")
-PRESET = Path("/usr/share/omarchy-iso/preset.json")
-
-
-def load_preset(path: Path | None = None) -> dict[str, str]:
-    """The choices a market's install media were built with (omarchy-iso-make
-    --preset). Applied here rather than in the configurator, so unattended
-    installs from the same media get them too."""
-    path = path or PRESET
-    if not path.is_file():
-        return {}
-    data = json.loads(path.read_text())
-    return {key: data[key] for key in ("keyboard", "timezone", "language", "region") if isinstance(data.get(key), str)}
 
 
 def validate_language(language: Any, registry: Path | None = None) -> None:
-    """A preset desktop language is a registry code, checked before any disk is
+    """The installer's language is a registry code, checked before any disk is
     touched; the target only ever reads it back as data."""
     registry = registry or LANGUAGES
     if language is None or language == "":
         return
     if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", language):
         raise RuntimeError(f"Unsupported language: {language!r}")
-    if registry.is_file() and language not in json.loads(registry.read_text()):
+    if language == "en":
+        return
+    if not registry.is_file() or language not in json.loads(registry.read_text()):
         raise RuntimeError(f"Unsupported language: {language!r}")
+
+
+PRESET = Path("/usr/share/omarchy-iso/preset.json")
+
+
+def load_preset(path: Path | None = None) -> dict[str, str]:
+    """The choices a market's install media were built with (omarchy-iso-make
+    --preset), the file the configurator's language picker reads too. Applied
+    here as well, so unattended installs from the same media get them."""
+    path = path or PRESET
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text())
+    return {key: data[key] for key in ("keyboard", "timezone", "language", "region") if isinstance(data.get(key), str)}
 
 
 @dataclass

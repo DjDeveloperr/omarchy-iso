@@ -223,6 +223,8 @@ Despite the local folder name, the first argument is the Omarchy source checkout
 
 Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
 
+Pass `--preset china` to build `omarchy-china`, install media for one market. `configs/presets/<name>.json` is baked in as `/usr/share/omarchy-iso/preset.json`, with any of `language` (a code from Omarchy's language registry), `keyboard` (a row of the setup form's keyboard list, such as `Chinese (Simplified, Pinyin)`), `timezone` (a tzdata name) and `region` (a region profile, used where the timezone names none). The installer preselects them and every choice stays the user's to change; installs that ask nothing, from an autoinstall drive or deferred to first boot, take the preset's language and region wherever their configuration leaves them unset.
+
 ### aarch64
 
 ```bash
