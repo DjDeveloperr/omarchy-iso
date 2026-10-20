@@ -388,7 +388,7 @@ else
   # ever matching it.
   settings_cache_dir="$bootstrap_cache_dir/settings"
   mkdir -p "$settings_cache_dir"
-  pacman --config /configs/pacman-online-${OMARCHY_MIRROR}.conf --noconfirm -Syw "$OMARCHY_SETTINGS_PACKAGE" --cachedir "$settings_cache_dir" --dbpath /tmp/offlinedb-bootstrap >/dev/null
+  pacman --config "$online_pacman_conf" --noconfirm -Syw "$OMARCHY_SETTINGS_PACKAGE" --cachedir "$settings_cache_dir" --dbpath /tmp/offlinedb-bootstrap >/dev/null
   regions_source=$(find "$settings_cache_dir" -maxdepth 1 -type f -name "$OMARCHY_SETTINGS_PACKAGE-*.pkg.tar.zst" | sort | head -1)
   if [[ -z $regions_source ]]; then
     echo "ERROR: downloaded package for $OMARCHY_SETTINGS_PACKAGE not found in $settings_cache_dir" >&2
