@@ -389,7 +389,7 @@ else
   settings_cache_dir="$bootstrap_cache_dir/settings"
   mkdir -p "$settings_cache_dir"
   pacman --config "$online_pacman_conf" --noconfirm -Syw "$OMARCHY_SETTINGS_PACKAGE" --cachedir "$settings_cache_dir" --dbpath /tmp/offlinedb-bootstrap >/dev/null
-  regions_source=$(find "$settings_cache_dir" -maxdepth 1 -type f -name "$OMARCHY_SETTINGS_PACKAGE-*.pkg.tar.zst" | sort | head -1)
+  regions_source=$(find "$settings_cache_dir" -maxdepth 1 -type f -name "$OMARCHY_SETTINGS_PACKAGE-[0-9]*.pkg.tar.*" ! -name '*.sig' | sort | head -1)
   if [[ -z $regions_source ]]; then
     echo "ERROR: downloaded package for $OMARCHY_SETTINGS_PACKAGE not found in $settings_cache_dir" >&2
     exit 1
@@ -527,12 +527,15 @@ bash /builder/prepare-regions.sh "$regions_source" "$build_cache_dir/airootfs/us
 # Profiles ship in the settings package, but the finalizer that applies them
 # ships in the runtime. A runtime without it would ignore the region marker,
 # leaving regional targets on the global mirrors without saying so.
-if [[ -n ${omarchy_pkg:-} && -d $build_cache_dir/airootfs/usr/share/omarchy-iso/regions ]]; then
-  runtime_listing=$(bsdtar -tf "$omarchy_pkg")
-  if ! grep -qx 'usr/bin/omarchy-apply-pacman' <<<"$runtime_listing"; then
+if [[ -d $build_cache_dir/airootfs/usr/share/omarchy-iso/regions ]]; then
+  if [[ -d /omarchy-source ]]; then
+    [[ -f /omarchy-source/bin/omarchy-apply-pacman ]]
+  else
+    grep -qx 'usr/bin/omarchy-apply-pacman' < <(bsdtar -tf "$omarchy_pkg")
+  fi || {
     echo "ERROR: $OMARCHY_SETTINGS_PACKAGE ships region profiles, but $OMARCHY_RUNTIME_PACKAGE lacks omarchy-apply-pacman to apply them." >&2
     exit 1
-  fi
+  }
 fi
 
 # Omarchy installs Node lazily through mise since omacom/omarchy#15876. A
