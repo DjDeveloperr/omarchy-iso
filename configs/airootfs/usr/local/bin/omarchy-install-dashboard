@@ -866,6 +866,7 @@ prompt_enter() {
 connect_wifi() {
   printf '%s%s' "$SHOW_CURSOR" "$CLEAR" >"$TTY_PATH" 2>/dev/null || true
   if omarchy-iso-wifi <"$TTY_PATH" >"$TTY_PATH" 2>&1; then
+    printf '%s%s%s' "$RESET" "$SHOW_CURSOR" "$CLEAR" >"$TTY_PATH" 2>/dev/null || true
     return 0
   else
     prompt_enter
