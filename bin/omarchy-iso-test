@@ -14,7 +14,7 @@
 # Usage: omarchy-iso-test [release/omarchy.iso] [options]
 #
 #   --keyboard LABEL   English (US/UK), Japanese, Japanese (US keyboard), Korean,
-#                      or Chinese (Simplified, Pinyin)/(Traditional, Zhuyin).
+#                      or Chinese (Simplified, Pinyin), Taiwan (Zhuyin) or Hong Kong (Cangjie).
 #                      OMARCHY_PATH must be the source tree used to build the ISO.
 #   --encrypt          Drive the encrypted install flow (default: unencrypted)
 #   --provision              Drive the deferred-provisioning install flow: no user during install, the
@@ -104,7 +104,7 @@ if [[ -n $PRESET ]]; then
 fi
 
 case "$KEYBOARD_LABEL" in
-  "English (US)" | "English (UK)" | "Japanese" | "Japanese (US keyboard)" | "Korean" | "Chinese (Simplified, Pinyin)" | "Chinese (Traditional, Zhuyin)") ;;
+  "English (US)" | "English (UK)" | "Japanese" | "Japanese (US keyboard)" | "Korean" | "Chinese (Simplified, Pinyin)" | "Taiwan (Zhuyin)" | "Hong Kong (Cangjie)") ;;
   *) echo "The VM harness cannot type credentials with keyboard: $KEYBOARD_LABEL" >&2; exit 1 ;;
 esac
 
@@ -865,7 +865,7 @@ drive_provision_owner() {
   capture_console "success-provision-07-review"
   press ret
 
-  # Finalization (offline Node unpack, LUKS re-key on encrypted installs)
+  # Finalization (user setup, LUKS re-key on encrypted installs)
   # runs before SDDM appears.
   capture_console "success-provision-08-finalizing"
 }
