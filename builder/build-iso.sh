@@ -617,6 +617,24 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   mapfile -t all_packages < <(printf '%s\n' "${all_packages[@]}" | sort -u)
 fi
 
+# A preset build also bundles its region's additions (packages-add) that the
+# repositories publish for this architecture; the installer skips any it lacks.
+preset_region=""
+[[ -z ${OMARCHY_ISO_PRESET:-} ]] || preset_region=$(jq -r '.region // empty' "/configs/presets/$OMARCHY_ISO_PRESET.json")
+region_additions="$build_cache_dir/airootfs/usr/share/omarchy-iso/regions/$preset_region/packages-add"
+if [[ $preset_region =~ ^[a-z]{2}$ && -f $region_additions ]]; then
+  mkdir -p /tmp/offlinedb-region
+  pacman --config "$online_pacman_conf" --dbpath /tmp/offlinedb-region -Sy >/dev/null
+  while read -r pkg; do
+    if pacman --config "$online_pacman_conf" --dbpath /tmp/offlinedb-region -Si -- "$pkg" >/dev/null 2>&1; then
+      all_packages+=("$pkg")
+    else
+      echo "$preset_region: $pkg has no $OMARCHY_ARCH build in the repositories; the ISO leaves it out" >&2
+    fi
+  done < <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$region_additions")
+  mapfile -t all_packages < <(printf '%s\n' "${all_packages[@]}" | sort -u)
+fi
+
 # Leaving the local builds out of the download also leaves out what they
 # depend on, so a dependency no package list names (omarchy-dev's
 # omarchy-themes-intros) would be missing from the mirror. Name each one,

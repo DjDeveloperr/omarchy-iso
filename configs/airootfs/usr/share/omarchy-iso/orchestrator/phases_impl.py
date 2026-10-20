@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import textwrap
 import time
 from dataclasses import replace
@@ -38,7 +39,7 @@ from . import archinstall_adapter as arch
 from .command import capture, capture_identifier, require_text
 from .context import InstallContext, hw_platform, iso_kernel
 from .keyboard import configure_keyboard
-from .region import GLOBAL
+from .region import GLOBAL, region_packages
 from .ui import error, info
 
 
@@ -886,7 +887,30 @@ def _runtime_package_list(ctx: InstallContext, base_pkgs_file: Path | None = Non
         for s in ("limine", "limine-mkinitcpio-hook", "limine-snapper-sync", "snapper"):
             if s not in already_installed and s not in pkgs:
                 pkgs.append(s)
+    # A region's profile can leave defaults out and add its own apps; an
+    # addition this ISO does not carry is skipped rather than failing the install.
+    skip, add = region_packages(getattr(ctx, "region", GLOBAL))
+    pkgs = [s for s in pkgs if s not in skip]
+    if add:
+        carried = _offline_package_names()
+        for s in add:
+            if s in already_installed or s in pkgs:
+                continue
+            if s in carried:
+                pkgs.append(s)
+            else:
+                info(f"› {s} is not on this ISO; leaving it out")
     return pkgs
+
+
+def _offline_package_names(mirror: Path | None = None) -> set[str]:
+    """Package names the ISO's offline repository indexes."""
+    db = (mirror or OFFLINE_MIRROR) / "offline.db.tar.gz"
+    if not db.is_file():
+        return set()
+    with tarfile.open(db) as archive:
+        entries = {member.name.split("/", 1)[0] for member in archive.getmembers()}
+    return {entry.rsplit("-", 2)[0] for entry in entries if entry.count("-") >= 2}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

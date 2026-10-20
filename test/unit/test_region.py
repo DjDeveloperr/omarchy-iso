@@ -257,6 +257,56 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(marker.stat().st_mode & 0o777, 0o644)
 
 
+class RegionPackagesTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.regions = write_profiles(self.root)
+        (self.regions / "cn/packages-skip").write_text("# blocked\nchromium\n")
+        (self.regions / "cn/packages-add").write_text("wechat-bin\nwps-office-cn\n\nfeishu-bin\n")
+        self.base = self.root / "omarchy-base.packages"
+        self.base.write_text("chromium\nmpv\n")
+
+    def package_list(self, region_name: str, carried: set[str]) -> list[str]:
+        with mock.patch.object(region, "REGIONS_DIR", self.regions), \
+                mock.patch.object(phases_impl, "_early_packages", return_value=[]), \
+                mock.patch.object(phases_impl, "_package_targets", return_value={"runtime": "omarchy", "settings": "omarchy-settings", "nvim": "omarchy-nvim"}), \
+                mock.patch.object(phases_impl, "_offline_package_names", return_value=carried), \
+                mock.patch.object(phases_impl.platform, "machine", return_value="x86_64"), \
+                mock.patch.object(phases_impl, "info"):
+            return phases_impl._runtime_package_list(types.SimpleNamespace(region=region_name), self.base)
+
+    def test_profiles_name_packages_to_skip_and_add(self):
+        self.assertEqual(region.region_packages("cn", self.regions), (["chromium"], ["wechat-bin", "wps-office-cn", "feishu-bin"]))
+        for name in ("global", "us", "../cn", "CN"):
+            with self.subTest(region=name):
+                self.assertEqual(region.region_packages(name, self.regions), ([], []))
+
+    def test_a_region_skips_defaults_and_adds_only_what_the_iso_carries(self):
+        world = self.package_list("global", {"wechat-bin"})
+        china = self.package_list("cn", {"wechat-bin", "wps-office-cn"})  # an aarch64 ISO would lack wps-office-cn
+        self.assertEqual(world[1:], ["chromium", "mpv"])
+        self.assertEqual(china[1:], ["mpv", "wechat-bin", "wps-office-cn"])
+        self.assertEqual(self.package_list("cn", set())[1:], ["mpv"])
+
+    def test_offline_names_come_from_the_repository_index(self):
+        import io
+        import tarfile
+        mirror = self.root / "mirror"
+        mirror.mkdir()
+        with tarfile.open(mirror / "offline.db.tar.gz", "w:gz") as archive:
+            for entry in ("wechat-bin-4.1.13.26-1", "lib32-foo-bar-1:2.0-3", "mpv-1:0.40-1"):
+                folder = tarfile.TarInfo(entry)
+                folder.type = tarfile.DIRTYPE
+                archive.addfile(folder)
+                desc = tarfile.TarInfo(entry + "/desc")
+                desc.size = 0
+                archive.addfile(desc, io.BytesIO(b""))
+        self.assertEqual(phases_impl._offline_package_names(mirror), {"wechat-bin", "lib32-foo-bar", "mpv"})
+        self.assertEqual(phases_impl._offline_package_names(self.root / "none"), set())
+
+
 class PrepareRegionsTest(unittest.TestCase):
     def run_prepare(self, regions: Path, root: Path) -> tuple[Path, str]:
         payload = root / "payload"

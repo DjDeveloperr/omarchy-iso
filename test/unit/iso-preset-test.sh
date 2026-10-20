@@ -42,3 +42,24 @@ got=$(ISO_PRESET="$preset" bash -c "$preset_block"$'\nprintf "%s|%s|%s" "$OMARCH
 got=$(ISO_PRESET="$work/none.json" bash -c "$preset_block"$'\nprintf "%s|%s|%s" "${OMARCHY_FORM_KEYBOARD_DEFAULT-unset}" "${OMARCHY_FORM_TIMEZONE_DEFAULT-unset}" "$preset_region"')
 [[ $got == "unset|unset|" ]] || { echo "the configurator without a preset read '$got'" >&2; exit 1; }
 echo "ok - the configurator preselects the preset's keyboard and timezone, and nothing without one"
+
+# A preset build bundles the region's additions its repositories publish for the architecture, and nothing for a build without a preset.
+block=$(sed -n '/^preset_region=""$/,/^fi$/p' "$ROOT/builder/build-iso.sh")
+mkdir -p "$work/build/configs/presets" "$work/build/cache/airootfs/usr/share/omarchy-iso/regions/cn" "$work/build/bin"
+cp "$preset" "$work/build/configs/presets/china.json"
+printf '# additions\nwechat-bin\nwps-office-cn\nfeishu-bin\n' >"$work/build/cache/airootfs/usr/share/omarchy-iso/regions/cn/packages-add"
+cat >"$work/build/bin/pacman" <<'SH'
+#!/bin/bash
+[[ " $* " == *" -Sy "* ]] && exit 0
+for name in $PUBLISHED; do [[ ${!#} == "$name" ]] && exit 0; done
+exit 1
+SH
+chmod +x "$work/build/bin/pacman"
+bundle() {
+  local block_for_test=${block//\/configs\/presets/$work/build/configs/presets}
+  PATH="$work/build/bin:$PATH" PUBLISHED="$1" OMARCHY_ISO_PRESET="$2" bash -c 'build_cache_dir=$1; online_pacman_conf=x; OMARCHY_ARCH=aarch64; all_packages=(mpv); eval "$2"; printf "%s " "${all_packages[@]}"' _ "$work/build/cache" "$block_for_test" 2>/dev/null
+}
+[[ $(bundle "wechat-bin wps-office-cn" china) == "mpv wechat-bin wps-office-cn " ]] || { echo "a China build bundles its published additions: $(bundle "wechat-bin wps-office-cn" china)" >&2; exit 1; }
+[[ $(bundle "wechat-bin" china) == "mpv wechat-bin " ]] || { echo "a China build leaves out additions with no build for the architecture" >&2; exit 1; }
+[[ $(bundle "wechat-bin wps-office-cn" "") == "mpv " ]] || { echo "a build without a preset bundles no region additions" >&2; exit 1; }
+echo "ok - a China build bundles the region's published additions, and a global build none"

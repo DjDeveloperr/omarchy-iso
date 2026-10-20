@@ -62,5 +62,15 @@ def region_for_install(timezone: str | None, preset: str | None = None, regions_
     return preset if preset == GLOBAL or (re.fullmatch(r"[a-z]{2}", preset) and (regions_dir / preset).is_dir()) else GLOBAL
 
 
+
+def region_packages(region: str, regions_dir: Path | None = None) -> tuple[list[str], list[str]]:
+    """The packages a region's profile leaves out of and adds to the defaults
+    (packages-skip, packages-add); global and profiles without them change nothing."""
+    regions_dir = regions_dir or REGIONS_DIR
+    if region == GLOBAL or not re.fullmatch(r"[a-z]{2}", region):
+        return [], []
+    profile = regions_dir / region
+    return _entries(profile / "packages-skip"), _entries(profile / "packages-add")
+
 if __name__ == "__main__":
     print(region_for_install(sys.argv[1] if len(sys.argv) > 1 else None, sys.argv[2] if len(sys.argv) > 2 else None))
