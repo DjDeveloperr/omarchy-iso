@@ -50,16 +50,21 @@ cp "$preset" "$work/build/configs/presets/china.json"
 printf '# additions\nwechat-bin\nwps-office-cn\nfeishu-bin\n' >"$work/build/cache/airootfs/usr/share/omarchy-iso/regions/cn/packages-add"
 cat >"$work/build/bin/pacman" <<'SH'
 #!/bin/bash
-[[ " $* " == *" -Sy "* ]] && exit 0
+[[ " $* " == *" -Sy "* ]] && exit "${SYNC_STATUS:-0}"
 for name in $PUBLISHED; do [[ ${!#} == "$name" ]] && exit 0; done
 exit 1
 SH
 chmod +x "$work/build/bin/pacman"
 bundle() {
   local block_for_test=${block//\/configs\/presets/$work/build/configs/presets}
-  PATH="$work/build/bin:$PATH" PUBLISHED="$1" OMARCHY_ISO_PRESET="$2" bash -c 'build_cache_dir=$1; online_pacman_conf=x; OMARCHY_ARCH=aarch64; all_packages=(mpv); eval "$2"; printf "%s " "${all_packages[@]}"' _ "$work/build/cache" "$block_for_test" 2>/dev/null
+  export SYNC_STATUS
+  PATH="$work/build/bin:$PATH" PUBLISHED="$1" OMARCHY_ISO_PRESET="$2" bash -c 'set -euo pipefail; build_cache_dir=$1; online_pacman_conf=x; OMARCHY_ARCH=aarch64; all_packages=(mpv); eval "$2"; printf "%s " "${all_packages[@]}"' _ "$work/build/cache" "$block_for_test" 2>/dev/null
 }
 [[ $(bundle "wechat-bin wps-office-cn" china) == "mpv wechat-bin wps-office-cn " ]] || { echo "a China build bundles its published additions: $(bundle "wechat-bin wps-office-cn" china)" >&2; exit 1; }
 [[ $(bundle "wechat-bin" china) == "mpv wechat-bin " ]] || { echo "a China build leaves out additions with no build for the architecture" >&2; exit 1; }
 [[ $(bundle "wechat-bin wps-office-cn" "") == "mpv " ]] || { echo "a build without a preset bundles no region additions" >&2; exit 1; }
-echo "ok - a China build bundles the region's published additions, and a global build none"
+if SYNC_STATUS=1 bundle "wechat-bin" china >/dev/null; then
+  echo "a China build stops when it cannot read the repositories" >&2
+  exit 1
+fi
+echo "ok - a China build bundles the region's published additions, a global build none, and a failed sync stops the build"
