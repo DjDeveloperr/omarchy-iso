@@ -7,7 +7,6 @@ import platform
 
 import json
 import os
-import re
 import secrets
 import subprocess
 from dataclasses import dataclass, field
@@ -24,13 +23,9 @@ def validate_language(language: Any, registry: Path | None = None) -> None:
     """The installer's language is a registry code, checked before any disk is
     touched; the target only ever reads it back as data."""
     registry = registry or LANGUAGES
-    if language is None or language == "":
+    if language is None or language in ("", "en"):
         return
-    if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", language):
-        raise RuntimeError(f"Unsupported language: {language!r}")
-    if language == "en":
-        return
-    if not registry.is_file() or language not in json.loads(registry.read_text()):
+    if not isinstance(language, str) or not registry.is_file() or language not in json.loads(registry.read_text()):
         raise RuntimeError(f"Unsupported language: {language!r}")
 
 

@@ -184,7 +184,7 @@ class PresetTest(unittest.TestCase):
     def test_language_is_validated_against_the_registry(self):
         registry = self.root / "locales.json"
         registry.write_text(json.dumps({"en": {}, "zh-CN": {}}))
-        for language in (None, "", "zh-CN"):
+        for language in (None, "", "en", "zh-CN"):
             context.validate_language(language, registry)
         for language in ("zh_CN", "xx", "../zh-CN", "zh-CN; reboot", "zh-CN\n", 7, ["zh-CN"]):
             with self.subTest(language=language), self.assertRaises(RuntimeError):
