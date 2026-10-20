@@ -14,16 +14,16 @@ source /builder/arm64-kernel-image.sh
 source /builder/archiso-aarch64-mkinitcpio.sh
 source /builder/grub-platform.sh
 
-# The online pacman configuration drives every package download below. On
-# aarch64 it points at Omarchy's aarch64 repository in the build's channel
-# (edge or rc) and Arch Linux ARM, and at a package bundle mounted at
-# /packages first when there is one.
+# The online pacman configuration drives every package download below: one per
+# architecture and channel. On aarch64 it points at Omarchy's aarch64
+# repository and its mirror of Arch Linux ARM in the build's channel, and at a
+# package bundle mounted at /packages first when there is one.
 case "$OMARCHY_ARCH" in
   x86_64)
     online_pacman_conf="/configs/pacman-online-${OMARCHY_MIRROR}.conf"
     ;;
   aarch64)
-    online_pacman_conf=/configs/pacman-online-aarch64.conf
+    online_pacman_conf="/configs/pacman-online-aarch64-${OMARCHY_MIRROR}.conf"
     # One image serves every board, on one kernel.
     if [[ $OMARCHY_KERNEL != linux-omarchy ]]; then
       echo "ERROR: aarch64 builds boot linux-omarchy (got '$OMARCHY_KERNEL')" >&2
@@ -33,8 +33,8 @@ case "$OMARCHY_ARCH" in
       echo "ERROR: the package bundle mounted at /packages needs a SHA256SUMS" >&2
       exit 1
     fi
-    if [[ $OMARCHY_MIRROR != edge && $OMARCHY_MIRROR != rc ]]; then
-      echo "ERROR: aarch64 builds use the edge or rc channel, the ones Omarchy publishes for aarch64 (got '$OMARCHY_MIRROR')" >&2
+    if [[ ! -f $online_pacman_conf ]]; then
+      echo "ERROR: aarch64 builds use the stable, rc or edge channel (got '$OMARCHY_MIRROR')" >&2
       exit 1
     fi
     ;;
@@ -78,6 +78,7 @@ fi
 # Packages installed into the Arch container used to build the ISO.
 pacman-key --init
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
+  channel_pacman_conf=$online_pacman_conf
   online_pacman_conf=/tmp/pacman-online-aarch64.conf
   if [[ -d /packages ]]; then
     # The platform bundle is the [platform] repo for this build. Verify it and
@@ -96,18 +97,12 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
     done
     repo-add -q "$bundle_index/platform.db.tar.gz" "$bundle_index"/*.pkg.tar.* 2>/dev/null || \
       repo-add "$bundle_index/platform.db.tar.gz" "$bundle_index"/*.pkg.tar.*
-    sed "s|^Server = file:///packages$|Server = file://$bundle_index|" /configs/pacman-online-aarch64.conf > "$online_pacman_conf"
+    sed "s|^Server = file:///packages$|Server = file://$bundle_index|" "$channel_pacman_conf" > "$online_pacman_conf"
   else
     # No bundle, so no [platform] repo: pacman refuses a repo it cannot sync.
     awk '/^\[platform\]$/ { skip = 1; next } /^\[/ { skip = 0 } !skip' \
-      /configs/pacman-online-aarch64.conf > "$online_pacman_conf"
+      "$channel_pacman_conf" > "$online_pacman_conf"
   fi
-  # The config names edge; an rc build takes [omarchy] from rc instead.
-  sed -i "s|^Server = https://pkgs\.omarchy\.org/edge/|Server = https://pkgs.omarchy.org/$OMARCHY_MIRROR/|" "$online_pacman_conf"
-  grep -Fqx "Server = https://pkgs.omarchy.org/$OMARCHY_MIRROR/\$arch" "$online_pacman_conf" || {
-    echo "ERROR: no $OMARCHY_MIRROR [omarchy] server in $online_pacman_conf" >&2
-    exit 1
-  }
 
   # The container image arrives pointed at Arch Linux ARM's own mirrors. Its
   # packages come from the same place the ISO's do: Omarchy's mirror of them.
