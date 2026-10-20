@@ -82,7 +82,8 @@ class RegionSelectionTest(unittest.TestCase):
             "OMARCHY_INSTALL_CONFIG": str(config_path),
             "OMARCHY_INSTALL_CREDS": str(creds_path),
             "OMARCHY_INSTALL_STATE_DIR": str(self.root / "state"),
-        }, clear=True), mock.patch.object(context, "_default_kernel", return_value="linux-omarchy"):
+        }, clear=True), mock.patch.object(context, "_default_kernel", return_value="linux-omarchy"), \
+                mock.patch.object(context, "PRESET", self.root / "no-preset.json"):
             return context.InstallContext.from_env()
 
     def test_context_resolves_region_before_install(self):
