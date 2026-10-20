@@ -312,20 +312,6 @@ if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
   fi
 fi
 
-# Node.js binary for offline mise install, matched to the target architecture.
-NODE_DIST_URL="https://nodejs.org/dist/latest"
-NODE_SHASUMS=$(curl -fsSL "$NODE_DIST_URL/SHASUMS256.txt")
-node_platform=linux-x64
-[[ $OMARCHY_ARCH == aarch64 ]] && node_platform=linux-arm64
-if ! IFS=$'\t' read -r NODE_FILENAME NODE_SHA < <(select_node_release "$node_platform" <<<"$NODE_SHASUMS"); then
-  echo "ERROR: could not find Node.js $node_platform release metadata" >&2
-  exit 1
-fi
-curl -fsSL "$NODE_DIST_URL/$NODE_FILENAME" -o "/tmp/$NODE_FILENAME"
-echo "$NODE_SHA /tmp/$NODE_FILENAME" | sha256sum -c -
-mkdir -p "$build_cache_dir/airootfs/opt/packages/"
-cp "/tmp/$NODE_FILENAME" "$build_cache_dir/airootfs/opt/packages/"
-
 # Packages installed into the live ISO environment itself (NOT the target system).
 # The selected omarchy-settings package is needed here so its post_install hook
 # drops Omarchy's plymouthd.conf into /etc/plymouth before mkarchiso builds the
@@ -362,6 +348,7 @@ sed -i -E '/^(linux|broadcom-wl)$/d' "$live_packages_file"
 if [[ -d /omarchy-source ]]; then
   base_pkg_lists=(/omarchy-source/install/omarchy-base.packages /omarchy-source/install/omarchy-other.packages)
   setup_form=/omarchy-source/install/provisioning/setup-form.sh
+  mise_work=/omarchy-source/install/user/mise-work.sh
 else
   # Pull the same package lists out of the freshly-downloaded Omarchy runtime
   # package so we don't need a local checkout in the non-local-source path.
@@ -383,6 +370,8 @@ else
   # actionable error below.
   bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/install/provisioning/setup-form.sh 2>/dev/null || true
   setup_form=/tmp/omarchy-pkglists/usr/share/omarchy/install/provisioning/setup-form.sh
+  bsdtar -xf "$omarchy_pkg" -C /tmp/omarchy-pkglists usr/share/omarchy/install/user/mise-work.sh 2>/dev/null || true
+  mise_work=/tmp/omarchy-pkglists/usr/share/omarchy/install/user/mise-work.sh
   # The aarch64 list, each platform's own and the x86_64-only one. Runtimes
   # from before the platform lists ship none, so each is optional.
   for platform_list in 'omarchy-aarch64*.packages' omarchy-x86_64-only.packages; do
@@ -505,6 +494,25 @@ if [[ ! -f $setup_form ]]; then
   exit 1
 fi
 cp "$setup_form" "$build_cache_dir/airootfs/usr/share/omarchy-iso/setup-form.sh"
+
+# Omarchy installs Node lazily through mise since omacom/omarchy#15876. A
+# runtime from before it unpacks a bundled Node tarball during setup and stops
+# the install without one, so it still gets the build for its architecture.
+# Remove this once every channel's runtime installs Node lazily.
+if grep -qF /opt/packages "$mise_work" 2>/dev/null; then
+  NODE_DIST_URL="https://nodejs.org/dist/latest"
+  NODE_SHASUMS=$(curl -fsSL "$NODE_DIST_URL/SHASUMS256.txt")
+  node_platform=linux-x64
+  [[ $OMARCHY_ARCH == aarch64 ]] && node_platform=linux-arm64
+  if ! IFS=$'\t' read -r NODE_FILENAME NODE_SHA < <(select_node_release "$node_platform" <<<"$NODE_SHASUMS"); then
+    echo "ERROR: could not find Node.js $node_platform release metadata" >&2
+    exit 1
+  fi
+  curl -fsSL "$NODE_DIST_URL/$NODE_FILENAME" -o "/tmp/$NODE_FILENAME"
+  echo "$NODE_SHA /tmp/$NODE_FILENAME" | sha256sum -c -
+  mkdir -p "$build_cache_dir/airootfs/opt/packages/"
+  cp "/tmp/$NODE_FILENAME" "$build_cache_dir/airootfs/opt/packages/"
+fi
 
 # Collect every package we want available in the offline mirror.
 declare -a all_packages
