@@ -1,0 +1,232 @@
+#!/bin/bash
+#
+# Unattended free-space install: the cidata counterpart of the wizard's "Free
+# space install (alongside existing data)". A cidata drive that carries
+# install_target.json next to the configurator's usual output files asks for
+# Omarchy to go into the largest unallocated region of one named disk, and for
+# every existing partition to be left alone:
+#
+#   {
+#     "mode": "free_space",
+#     "disk": "/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_1TB_S7HDNS0L540503B",
+#     "reclaim_partuuids": ["<esp partuuid>", "<root partuuid>"]
+#   }
+#
+# Name the disk by-id: kernel names like nvme0n1 can swap between boots.
+#
+# reclaim_partuuids is optional, for rigs that reinstall in a loop. It names
+# the partitions a previous free-space install made on the same disk (GPT
+# names OMARCHY_EFI and OMARCHY_ROOT; anything else is refused); each is
+# discarded, its firmware boot entries are removed, and it is deleted, so its
+# space is free again. Every other partition must come out of the run exactly
+# as it went in, and the run fails if one didn't.
+#
+# The target is partitioned, formatted and mounted by the same code the wizard
+# uses (disk-partitioning.sh), and user_configuration.json is turned into the
+# pre-mounted ("protected") configuration the wizard writes for this mode.
+#
+# The optional argument is the directory holding the cidata files (/root on
+# the ISO).
+
+set -euo pipefail
+
+dir=${1:-/root}
+target_file=$dir/install_target.json
+config=$dir/user_configuration.json
+credentials=$dir/user_credentials.json
+
+DISK_PARTITIONING="${DISK_PARTITIONING:-/usr/share/omarchy-iso/disk-partitioning.sh}"
+source "$DISK_PARTITIONING"
+
+abort() {
+  echo "Error: $1" >&2
+  exit 1
+}
+
+# Same release order as the configurator's hook: a mounted filesystem or an
+# open LUKS mapping would keep parted from removing the partitions.
+disk_abort_hook() {
+  umount -R /mnt 2>/dev/null || true
+  umount /mnt/btrfs-root 2>/dev/null || true
+  rmdir /mnt/btrfs-root 2>/dev/null || true
+  cryptsetup close omarchy_root 2>/dev/null || true
+  rollback_created_parts "$disk"
+  abort "$1"
+}
+
+GUID='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+# The partition table of $disk as sfdisk reports it, minus the partitions
+# whose PARTUUIDs are given: the disk's label, id and usable range, and every
+# other partition's node, start, size, type, uuid, name and attributes,
+# compared exactly.
+partition_table() {
+  sfdisk --json "$disk" | jq -S '
+    ($ARGS.positional | map(ascii_downcase)) as $skip
+    | .partitiontable
+    | .partitions = ((.partitions // []) | map(select((.uuid | ascii_downcase) as $u | any($skip[]; . == $u) | not)))
+  ' --args "$@"
+}
+
+partuuid_of() {
+  blkid -s PARTUUID -o value "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Check one partition named for reclaiming without touching it, and print
+# "<node> <number> <uuid>", or nothing when it is already gone. Every named
+# partition is checked before any is touched, so a request that names one
+# wrong partition reclaims nothing.
+check_reclaim() {
+  local uuid=$1 part name
+  [[ $uuid =~ $GUID ]] || abort "reclaim_partuuids: '$uuid' is not a partition UUID"
+  part=$(readlink -f "/dev/disk/by-partuuid/$uuid" 2>/dev/null || true)
+  if [[ -z $part || ! -b $part ]]; then
+    echo "Partition $uuid is already gone; nothing to reclaim." >&2
+    return 0
+  fi
+  [[ $(partuuid_of "$part") == "$uuid" ]] ||
+    abort "Partition $uuid resolved to $part, which has another PARTUUID; refusing to reclaim it"
+  name=${part#/dev/}
+  [[ /dev/$(lsblk -no PKNAME "$part" | tail -n1) == "$disk" ]] ||
+    abort "Partition $uuid ($part) is not on $disk; refusing to reclaim it"
+  # Only what a free-space install made: a wrong UUID must never reach a
+  # partition that holds somebody's data.
+  case $(lsblk -no PARTLABEL "$part") in
+    OMARCHY_EFI | OMARCHY_ROOT) ;;
+    *) abort "Partition $uuid ($part) was not made by an Omarchy free-space install; refusing to reclaim it" ;;
+  esac
+  [[ -z $(lsblk -no MOUNTPOINTS "$part" | tr -d '[:space:]') ]] ||
+    abort "Partition $uuid ($part) is mounted; refusing to reclaim it"
+  [[ -z $(ls -A "/sys/class/block/$name/holders" 2>/dev/null) ]] ||
+    abort "Partition $uuid ($part) is in use; refusing to reclaim it"
+  echo "$part $(cat "/sys/class/block/$name/partition") $uuid"
+}
+
+# Delete a checked partition, with the firmware boot entries that load from
+# it: they would point at nothing once it is gone, and firmware variable
+# storage is small. An entry matches only by the GPT partition its device path
+# starts with, HD(<n>,GPT,<uuid>,...); efibootmgr prints the path after the
+# label and a tab, so nothing in a label can match.
+reclaim_partition() {
+  local part=$1 num=$2 uuid=$3 entry
+  for entry in $(efibootmgr --verbose 2>/dev/null |
+    awk -F'\t' -v pat="^HD\\\\([0-9]+,GPT,$(tr '[:lower:]' '[:upper:]' <<<"$uuid")," \
+      '/^Boot[0-9A-Fa-f]{4}/ && toupper($2) ~ pat { print substr($1, 5, 4) }'); do
+    disk_step "removing firmware boot entry Boot$entry" efibootmgr --quiet --bootnum "$entry" --delete-bootnum
+  done
+
+  # Discard so every run starts from the same flash state rather than one that
+  # depends on how many runs came before.
+  blkdiscard --force "$part" 2>&1 || echo "Discard of $part failed; reclaiming it without."
+  disk_step "deleting partition $num ($uuid) on $disk" parted --script "$disk" rm "$num"
+}
+
+[[ -f $target_file ]] || abort "$target_file not found"
+mode=$(jq -r '.mode // empty' "$target_file")
+[[ $mode == free_space ]] || abort "install_target.json: unsupported mode '${mode}'"
+disk=$(jq -r '.disk // empty' "$target_file")
+[[ -n $disk ]] || abort "install_target.json names no disk"
+[[ -e $disk ]] || abort "Disk $disk not found"
+disk=$(readlink -f "$disk")
+[[ $(lsblk -dno TYPE "$disk" 2>/dev/null) == disk ]] || abort "$disk is not a whole disk"
+
+# The free-space install registers an EFI boot entry, as in the wizard.
+[[ -d /sys/firmware/efi ]] || abort "A free-space install needs UEFI"
+
+boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+if [[ -n $boot_source ]]; then
+  boot_disk=$(lsblk -no PKNAME "$boot_source" 2>/dev/null | tail -n1)
+  [[ /dev/${boot_disk:-${boot_source#/dev/}} != "$disk" ]] || abort "$disk is the install medium"
+fi
+
+bl_part=$(detect_bitlocker || true)
+[[ -z $bl_part ]] || abort "BitLocker signature detected on $bl_part; turn BitLocker off in Windows first"
+
+encrypt_installation=$(tr -d '[:space:]' <"$dir/user_encrypt_installation.txt" 2>/dev/null || true)
+[[ $encrypt_installation == false ]] || encrypt_installation=true
+password=""
+if [[ $encrypt_installation == true ]]; then
+  password=$(jq -r '.encryption_password // empty' "$credentials")
+  [[ -n $password ]] || abort "An encrypted install needs encryption_password in user_credentials.json"
+  esp_mount_in_target=/boot
+else
+  esp_mount_in_target=/efi
+fi
+
+kernel_choice=$(jq -r '.kernels[0] // empty' "$config")
+[[ -n $kernel_choice ]] || abort "user_configuration.json names no kernel"
+efi_binary=$(jq -r '.omarchy_install.boot.efi_binary // empty' "$config")
+if [[ -z $efi_binary ]]; then
+  [[ $(uname -m) == aarch64 ]] && efi_binary=limine_aa64.efi || efi_binary=limine_x64.efi
+fi
+
+mapfile -t reclaim < <(jq -r '.reclaim_partuuids[]? // empty' "$target_file" | tr '[:upper:]' '[:lower:]')
+
+echo "Free-space install on $disk"
+before=$(partition_table "${reclaim[@]}")
+
+victims=()
+for uuid in "${reclaim[@]}"; do
+  victim=$(check_reclaim "$uuid") || exit 1
+  [[ -n $victim ]] && victims+=("$victim")
+done
+for victim in "${victims[@]}"; do
+  # shellcheck disable=SC2086 # node, number and uuid, none with spaces
+  reclaim_partition $victim
+done
+partprobe "$disk" 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+
+plan_free_space_layout ||
+  abort "Not enough free space on $disk: $(awk -v b="$free_space_usable_b" 'BEGIN { printf "%.1fGB", b / 1024^3 }') usable, Omarchy needs at least 32GB"
+
+# From here on this run owns partitions: any failure, including one set -e
+# would act on before a check could, undoes them.
+set -E
+trap 'disk_abort_hook "Preparing the free-space target failed (line $LINENO)"' ERR
+
+prepare_free_space_target
+
+esp_uuid=$(partuuid_of "$efi_dev")
+root_uuid=$(partuuid_of "$root_partition_device")
+after=$(partition_table "$esp_uuid" "$root_uuid")
+if [[ $before != "$after" ]]; then
+  diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true
+  disk_abort_hook "Partitions outside the free-space target changed on $disk"
+fi
+
+luks_uuid_json=null
+if [[ $encrypt_installation == true ]]; then
+  luks_uuid_json=$(blkid -s UUID -o value "$root_partition_device" | jq -R .)
+fi
+
+jq \
+  --arg esp_mount "$esp_mount_in_target" \
+  --arg efi_binary "$efi_binary" \
+  --arg esp_device "$efi_dev" \
+  --arg root_device "$root_partition_device" \
+  --arg root_mapper "$root_mapper" \
+  --arg kernel "$kernel_choice" \
+  --argjson luks_uuid "$luks_uuid_json" '
+  .bootloader_config = { bootloader: "Limine", uki: false, removable: false }
+  | .omarchy_install.mode = "protected"
+  | .omarchy_install.target_mount = "/mnt"
+  | .omarchy_install.boot = {
+      esp_mount: $esp_mount,
+      esp_path: "/EFI/limine",
+      efi_binary: $efi_binary,
+      enable_fallback: false
+    }
+  | .omarchy_install.storage = {
+      esp_device: $esp_device,
+      root_device: $root_device,
+      root_mapper: $root_mapper,
+      luks_uuid: $luks_uuid,
+      kernel: $kernel
+    }
+  | .disk_config = { config_type: "pre_mounted_config", mountpoint: "/mnt" }
+' "$config" >"$config.free-space"
+mv "$config.free-space" "$config"
+trap - ERR
+
+echo "Free-space target ready: ESP $efi_dev (PARTUUID $esp_uuid), root $root_partition_device (PARTUUID $root_uuid)"

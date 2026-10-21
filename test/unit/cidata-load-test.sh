@@ -124,6 +124,22 @@ run_load || fail "required pair plus authorized_keys loads"
 [[ ! -e $sandbox/root/tailscale_authkey ]] || fail "absent tailscale_authkey is not copied"
 pass "present optional files are copied, absent ones skipped"
 
+# A free-space target travels with the configuration, and one left over from
+# an earlier load never turns a full-disk drive into a free-space install.
+new_sandbox
+attach_drive cidata
+write_required_pair
+echo '{"mode": "free_space", "disk": "/dev/disk/by-id/nvme-x"}' >"$sandbox/media/install_target.json"
+run_load || fail "drive with install_target.json loads"
+[[ -f $sandbox/root/install_target.json ]] || fail "install_target.json is copied"
+new_sandbox
+attach_drive cidata
+write_required_pair
+echo '{"mode": "free_space"}' >"$sandbox/root/install_target.json"
+run_load || fail "full-disk drive after a free-space load loads"
+[[ ! -e $sandbox/root/install_target.json ]] || fail "stale install_target.json is cleared"
+pass "install_target.json is copied, and a stale one cleared"
+
 # A defer-provisioning marker replaces user_credentials.json: deferred-provisioning installs
 # creation to first boot, so imaging rigs ship no credentials at all.
 new_sandbox

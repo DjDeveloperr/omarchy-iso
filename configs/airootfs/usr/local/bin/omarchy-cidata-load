@@ -14,6 +14,9 @@
 # A `defer-provisioning` marker file stands in for user_credentials.json: deferred-provisioning
 # installs defer user creation to first boot, so imaging rigs ship no credentials.
 #
+# An install_target.json asks for a free-space install instead of a full-disk
+# one; omarchy-cidata-free-space documents it.
+#
 # The optional argument prefixes every path the script touches; tests use it to
 # run against a sandbox instead of the live system.
 
@@ -43,7 +46,7 @@ mount -o ro "$device" "$mnt" || exit 1
 # otherwise force a fresh drive back into deferred provisioning or hand it an old
 # LUKS passphrase. The interactive wizard writes these same names, but a
 # cidata load always precedes it, so nothing of the user's is discarded here.
-optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey)
+optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey install_target.json)
 for file in user_configuration.json "${optional_inputs[@]}"; do
   rm -f "$dest/$file"
 done

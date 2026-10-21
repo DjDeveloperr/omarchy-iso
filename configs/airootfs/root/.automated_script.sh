@@ -104,6 +104,12 @@ cd /root
 if /usr/local/bin/omarchy-cidata-load; then
   echo "Autoinstall configuration found on cidata drive; skipping the configurator."
   export OMARCHY_UI_INTERACTIVE=no
+  # A free-space install prepares and mounts its target here, as the wizard's
+  # free-space mode does before handing over.
+  if [[ -f /root/install_target.json ]] && ! /usr/local/bin/omarchy-cidata-free-space /root; then
+    echo "Installation stopped: the free-space target could not be prepared."
+    exit 1
+  fi
 else
   ./configurator
 fi
