@@ -587,7 +587,7 @@ def _warn_boot_entry_refused(reason: str) -> None:
     """
     error(
         f"Warning: this firmware would not register a 'Limine' UEFI boot entry. {reason}. "
-        "The install continues, because Omarchy also deploys EFI/BOOT/BOOTX64.EFI on its "
+        f"The install continues, because Omarchy also deploys EFI/BOOT/BOOT{_efi_arch_suffix()}.EFI on its "
         "own EFI partition and firmware takes that path when nothing in NVRAM matches. "
         "The boot check at the end of the install stops an install that ends up with "
         "neither route."
@@ -2068,7 +2068,7 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     it before the install ends is the case worth naming, because nothing
     else in the install notices.
     """
-    fallback_binary = esp_mount / "EFI" / "BOOT" / "BOOTX64.EFI"
+    fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
     has_fallback = fallback_binary.exists() and fallback_binary.stat().st_size > 0
     has_entry = bool(_find_label_entries(_read_efibootmgr()["entries"], "Limine"))
 

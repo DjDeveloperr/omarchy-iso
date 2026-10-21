@@ -137,6 +137,10 @@ class BootRouteValidationTest(unittest.TestCase):
     """Either route boots the machine; losing both is what must stop the install."""
 
     def setUp(self):
+        # These cases name BOOTX64.EFI; the aarch64 one patches over this.
+        machine = mock.patch.object(phases_impl.platform, "machine", return_value="x86_64")
+        machine.start()
+        self.addCleanup(machine.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.esp = Path(self.tmp.name) / "esp"
@@ -174,6 +178,15 @@ class BootRouteValidationTest(unittest.TestCase):
         warn.assert_called_once()
         self.assertIn("BOOTX64.EFI", warn.call_args[0][0])
 
+    def test_aarch64_removable_path_is_bootaa64(self):
+        path = self.esp / "EFI" / "BOOT" / "BOOTAA64.EFI"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"MZ")
+        with mock.patch.object(phases_impl.platform, "machine", return_value="aarch64"):
+            warn = self.validate({"0000": "Windows Boot Manager"})
+        warn.assert_called_once()
+        self.assertIn("BOOTAA64.EFI", warn.call_args[0][0])
+
     def test_empty_fallback_file_does_not_count_as_a_route(self):
         self.write_fallback(b"")
         warn = self.validate({"0002": "Limine"})
@@ -194,6 +207,12 @@ class BootEntryRegistrationTest(unittest.TestCase):
     finalize_limine_boot writes EFI/BOOT/BOOTX64.EFI. Raising here leaves the
     machine with neither route, which is issue #127.
     """
+
+    def setUp(self):
+        # The warnings name BOOTX64.EFI, the x86_64 removable path.
+        machine = mock.patch.object(phases_impl.platform, "machine", return_value="x86_64")
+        machine.start()
+        self.addCleanup(machine.stop)
 
     def register(self, results, entries_after=None):
         """Run _register_limine_efi_entry with efibootmgr's exit codes scripted.
