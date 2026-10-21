@@ -1,0 +1,15 @@
+[Unit]
+Description=Unmute All Sound Card Controls For Use With The Live Arch Environment
+# Only the accessibility entry needs sound, and a sound card is there once
+# sound.target is. releng's Wants=systemd-udev-settle.service was pulled in on
+# every boot with a sound card, although the condition then skips this unit,
+# and settle holds sysinit.target until every device has been probed.
+After=sound.target
+ConditionKernelCommandLine=accessibility=on
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/livecd-sound -u
+
+[Install]
+WantedBy=sound.target
