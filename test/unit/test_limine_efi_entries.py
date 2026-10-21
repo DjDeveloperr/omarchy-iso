@@ -44,6 +44,10 @@ class LimineEFIEntriesTest(unittest.TestCase):
         self.assertEqual(self.deleted(calls), ["0002"])
         self.assertEqual(calls[-1], ["efibootmgr", "--bootorder", "0006,0003,0001,0004,0005"])
 
+    def test_next_boot_is_the_new_entry(self):
+        calls = self.run_registration()
+        self.assertIn(["efibootmgr", "--bootnext", "0006"], calls)
+
     def test_creation_failure_does_not_delete_existing_entries(self):
         calls = []
         def fail(command, **kwargs):

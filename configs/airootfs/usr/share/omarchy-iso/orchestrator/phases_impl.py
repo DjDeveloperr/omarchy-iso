@@ -528,6 +528,18 @@ def _register_limine_efi_entry(
         if res.returncode != 0:
             info(f"warning: failed to delete old EFI boot entry {num}")
 
+    # Some firmware keeps its own priority list and puts it back at the next
+    # POST: an MSI MAG Z690 Tomahawk appended the new entry after its own
+    # entries and booted the other install on the disk. BootNext is read
+    # before BootOrder, so the first boot reaches what was just installed.
+    # Firmware that refuses the write keeps the BootOrder route below.
+    res = subprocess.run(
+        ["efibootmgr", "--bootnext", limine_num],
+        check=False, capture_output=True,
+    )
+    if res.returncode != 0:
+        info(f"warning: could not set BootNext to {limine_num}")
+
     keep = [
         num
         for num in pre_state["order"]
