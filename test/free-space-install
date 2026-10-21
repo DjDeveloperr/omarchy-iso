@@ -170,6 +170,12 @@ one_limine_entry_on() {
   [[ $(grep -ci 'limine' "$2") == 1 && $(grep -i 'limine' "$2" | grep -ci "$1") == 1 ]]
 }
 
+# The removable path firmware falls back to when it drops the NVRAM entry
+# (MSI does at the next POST): Limine itself, on the install's own ESP.
+removable_path_is_limine() {
+  ssh_sudo "cmp -s /boot/EFI/BOOT/BOOTX64.EFI /boot/EFI/limine/limine_x64.efi"
+}
+
 # Prints "<esp partuuid> <root partuuid>" of the running install.
 installed_partuuids() {
   ssh_sudo 'lsblk -rno PARTUUID,PARTLABEL /dev/vda' |
@@ -205,6 +211,7 @@ read -r esp1 root1 < <(installed_partuuids)
 check "first: OMARCHY_EFI and OMARCHY_ROOT exist" test -n "$esp1" -a -n "$root1"
 check "first: root is on LUKS" grep -q crypto_LUKS "$RUN_DIR/first-lsblk.txt"
 check "first: one Limine boot entry, on the new ESP" one_limine_entry_on "$esp1" "$RUN_DIR/first-efibootmgr.txt"
+check "first: the ESP boots Limine from the removable path" removable_path_is_limine
 
 log "2. A reclaim naming somebody's partition is refused"
 write_cidata "[\"$esp1\", \"$(existing_partuuid 2)\"]"
@@ -232,6 +239,7 @@ check "second: a new ESP and root" test -n "$esp2" -a -n "$root2" -a "$esp2" != 
 check "second: the first ESP is gone" absent "$esp1" "$RUN_DIR/second-lsblk.txt"
 check "second: the first root is gone" absent "$root1" "$RUN_DIR/second-lsblk.txt"
 check "second: one Limine boot entry, on the new ESP" one_limine_entry_on "$esp2" "$RUN_DIR/second-efibootmgr.txt"
+check "second: the ESP boots Limine from the removable path" removable_path_is_limine
 check "second: no boot entry points at the first ESP" absent "$esp1" "$RUN_DIR/second-efibootmgr.txt"
 ssh_guest "systemctl --failed --no-legend --plain" >"$RUN_DIR/second-failed-units.txt" 2>/dev/null || echo "query failed" >"$RUN_DIR/second-failed-units.txt"
 check "second: no failed units" test ! -s "$RUN_DIR/second-failed-units.txt"
