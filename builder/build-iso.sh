@@ -231,7 +231,11 @@ else
   # The installer is text-only: no audio or Bluetooth unless the screen reader
   # entry asks for sound, which does not take these options.
   boot_splash_kernel_options="quiet splash module_blacklist=snd,bluetooth "
-  kernel_options="xe.enable_panel_replay=0 initramfs_async=0"
+  # The installer is a few minutes of I/O and decompression on AC power, so
+  # idle cores gain nothing from deep C-states, and on Arrow Lake-H leaving them
+  # has crashed the kernel (omarchy-iso#305). Keep only the first hardware idle
+  # state (sysfs state1) enabled; no effect on AMD.
+  kernel_options="xe.enable_panel_replay=0 initramfs_async=0 intel_idle.states_off=0x3fc"
 fi
 for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg"; do
   configure_grub_platform "$grub_config" "$OMARCHY_ARCH"
