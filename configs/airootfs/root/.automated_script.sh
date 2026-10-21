@@ -48,6 +48,21 @@ set_tokyo_night_colors() {
 }
 set_tokyo_night_colors
 
+# The kernel's built-in console font has 256 glyphs and no Cyrillic or Greek,
+# and the console draws those letters as Latin look-alikes: with a Russian
+# layout switched to Cyrillic, "лмь" shows as "lm'", so nobody can tell which
+# layout is active. The live fonts cover Latin, Cyrillic, Greek and the logo's
+# blocks (usr/share/omarchy-iso/fonts/README.md). Keep the height the kernel
+# chose for this screen.
+set_console_font() {
+  local height
+  height=$(showconsolefont -i 2>/dev/null | cut -dx -f2)
+  if [[ $height == "16" || $height == "32" ]]; then
+    setfont "/usr/share/omarchy-iso/fonts/omarchy-live$height.psf.gz" 2>/dev/null || true
+  fi
+}
+set_console_font
+
 mkdir -p /var/log
 touch "$OMARCHY_INSTALL_LOG_FILE"
 
