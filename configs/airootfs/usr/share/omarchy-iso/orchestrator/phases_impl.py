@@ -2053,6 +2053,30 @@ def _validate_linux_boot_entry(esp_mount: Path, config_text: str, encrypted: boo
     raise RuntimeError(f"{esp_mount / 'limine.conf'} has no bootable Omarchy Linux entry with a kernel and initramfs")
 
 
+def _partuuid_of_mount(mount: Path) -> str:
+    """PARTUUID of the partition mounted at mount, or "" when it cannot be read."""
+    source = capture(["findmnt", "-n", "-o", "SOURCE", str(mount)]).stdout.strip()
+    if not source:
+        return ""
+    return capture(["lsblk", "-n", "-d", "-o", "PARTUUID", source]).stdout.strip().lower()
+
+
+def _this_esp_limine_entries(entries: dict[str, str], esp_mount: Path) -> list[str]:
+    """The "Limine" entries that boot from the ESP mounted at esp_mount.
+
+    Other disks may carry a Limine entry too, and it does not boot this install.
+    With device paths in the listing, keep only entries on this ESP's partition,
+    as _register_limine_efi_entry does when it retires duplicates. Without them
+    (or without this ESP's PARTUUID) the listing cannot tell entries apart, so
+    the label alone decides.
+    """
+    limine = _find_label_entries(entries, "Limine")
+    partuuid = _partuuid_of_mount(esp_mount)
+    if not partuuid or not any("hd(" in entries[num].lower() for num in limine):
+        return limine
+    return [num for num in limine if f",gpt,{partuuid}," in entries[num].lower()]
+
+
 def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     """Check the two ways firmware can reach this install, and insist on one.
 
@@ -2070,7 +2094,7 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     """
     fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
     has_fallback = fallback_binary.exists() and fallback_binary.stat().st_size > 0
-    has_entry = bool(_find_label_entries(_read_efibootmgr()["entries"], "Limine"))
+    has_entry = bool(_this_esp_limine_entries(_read_efibootmgr()["entries"], esp_mount))
 
     if not has_entry and not has_fallback:
         raise RuntimeError(

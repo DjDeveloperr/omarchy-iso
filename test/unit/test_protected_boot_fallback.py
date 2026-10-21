@@ -141,6 +141,9 @@ class BootRouteValidationTest(unittest.TestCase):
         machine = mock.patch.object(phases_impl.platform, "machine", return_value="x86_64")
         machine.start()
         self.addCleanup(machine.stop)
+        partuuid = mock.patch.object(phases_impl, "_partuuid_of_mount", return_value="")
+        partuuid.start()
+        self.addCleanup(partuuid.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.esp = Path(self.tmp.name) / "esp"
@@ -177,6 +180,22 @@ class BootRouteValidationTest(unittest.TestCase):
         warn = self.validate({"0002": "Limine"})
         warn.assert_called_once()
         self.assertIn("BOOTX64.EFI", warn.call_args[0][0])
+
+    def test_another_disks_limine_entry_is_not_this_installs_route(self):
+        other = "Limine\tHD(1,GPT,0d9c9d4f-0000-4000-8000-000000000001,0x800,0x400000)/\\EFI\\limine\\limine_x64.efi"
+        with mock.patch.object(phases_impl, "_partuuid_of_mount",
+                               return_value="7f3e2a10-0000-4000-8000-000000000002"):
+            with self.assertRaises(RuntimeError):
+                self.validate({"0003": other})
+
+    def test_this_esps_limine_entry_is_a_route(self):
+        uuid = "7f3e2a10-0000-4000-8000-000000000002"
+        mine = f"Limine\tHD(4,GPT,{uuid.upper()},0x800,0x400000)/\\EFI\\limine\\limine_x64.efi"
+        other = "Limine\tHD(1,GPT,0d9c9d4f-0000-4000-8000-000000000001,0x800,0x400000)/\\EFI\\limine\\limine_x64.efi"
+        self.write_fallback()
+        with mock.patch.object(phases_impl, "_partuuid_of_mount", return_value=uuid):
+            warn = self.validate({"0003": other, "0004": mine})
+        warn.assert_not_called()
 
     def test_aarch64_removable_path_is_bootaa64(self):
         path = self.esp / "EFI" / "BOOT" / "BOOTAA64.EFI"
