@@ -1,0 +1,241 @@
+#!/bin/bash
+#
+# Unattended free-space install, twice, on a disk that already holds data:
+# the loop a test rig runs on a real machine, rehearsed in QEMU.
+#
+# The disk is shaped like a workstation that keeps free space for test
+# installs: an unnamed ESP and root (somebody's own install) and a named
+# scratch partition, each holding random data, then about 42GiB unallocated.
+# The disk carries a serial and is named by-id, as a rig names a real one.
+#
+#   1. cidata installs into the free space, encrypted. The installed system
+#      boots through Limine and the LUKS prompt.
+#   2. cidata names step 1's ESP and the unnamed root in reclaim_partuuids,
+#      as a rig with one wrong UUID would. The installed system sets BootNext
+#      to the ISO and reboots; the ISO must refuse and change nothing, not
+#      even the partition it was right about.
+#   3. cidata reclaims what step 1 made. The ISO deletes it, its firmware boot
+#      entry with it, and installs again in the same space.
+#
+# After every step the three existing partitions must hash and dump exactly
+# as they were built.
+#
+# Usage: test/free-space-install release/omarchy.iso [--memory MB]
+
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+ISO=""
+export OMARCHY_INTEGRATION_MEMORY=4096
+export OMARCHY_INTEGRATION_NO_PREVIEW=true
+while (($#)); do
+  case "$1" in
+    --memory) OMARCHY_INTEGRATION_MEMORY="$2"; shift ;;
+    *.iso) ISO="$1" ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+[[ -f $ISO ]] || { echo "Usage: $0 release/omarchy.iso [--memory MB]" >&2; exit 1; }
+
+export OMARCHY_INTEGRATION_ISO
+OMARCHY_INTEGRATION_ISO=$(realpath "$ISO")
+export OMARCHY_INTEGRATION_SSH_PORT=${OMARCHY_INTEGRATION_SSH_PORT:-2332}
+export DISK_SERIAL=OMARCHYFREESPACE
+SCENARIO=free-space-install
+source "$ROOT/test/integration.d/base-test.sh"
+
+DISK_RAW="$RUN_DIR/disk.raw"
+DISK="$RUN_DIR/disk.qcow2"
+BY_ID=/dev/disk/by-id/virtio-$DISK_SERIAL
+MIB=$((1024 * 1024))
+
+# --------------------------------------------------------------- the disk
+
+# Start and length in bytes of partition $1 of the raw image.
+part_extent() {
+  parted -ms "$DISK_RAW" unit B print | awk -F: -v n="$1" '$1 == n { gsub(/B/, "", $2); gsub(/B/, "", $4); print $2, $4 }'
+}
+
+build_disk() {
+  local n start size
+  rm -f "$DISK_RAW"
+  truncate -s 48G "$DISK_RAW"
+  sfdisk --quiet "$DISK_RAW" <<'LAYOUT'
+label: gpt
+start=2048, size=512MiB, type=U
+size=4GiB, type=L
+size=1GiB, type=L, name=omarchy-trace-scratch
+LAYOUT
+  for n in 1 2 3; do
+    read -r start size < <(part_extent "$n")
+    head -c $((8 * MIB)) /dev/urandom |
+      dd of="$DISK_RAW" bs=1M seek=$((start / MIB)) conv=notrunc status=none
+  done
+  for n in 1 2 3; do
+    read -r start size < <(part_extent "$n")
+    dd if="$DISK_RAW" iflag=skip_bytes,count_bytes skip="$start" count="$size" bs=4M status=none |
+      sha256sum | cut -d' ' -f1
+  done >"$RUN_DIR/existing.sha256"
+  sfdisk --dump "$DISK_RAW" | awk -F': *' '/^\// { print tolower($2) }' >"$RUN_DIR/existing.sfdisk"
+  qemu-img convert -O qcow2 "$DISK_RAW" "$DISK"
+  rm -f "$DISK_RAW"
+}
+
+existing_partuuid() {
+  sed -n "${1}p" "$RUN_DIR/existing.sfdisk" | grep -o 'uuid=[0-9a-f-]*' | cut -d= -f2
+}
+
+# ---------------------------------------------------------------- cidata
+
+# $1: the reclaim_partuuids JSON array. The image QEMU has open is rewritten
+# in place, as a rig rewrites its virtual drive between runs.
+CIDATA_LIVE="$RUN_DIR/cidata-live.img"
+write_cidata() {
+  local reclaim="$1" dir="$BASE_DIR/cidata"
+  build_cidata
+  jq --arg pw "$GUEST_PASSWORD" '. + {encryption_password: $pw}' "$dir/user_credentials.json" >"$dir/c" &&
+    mv "$dir/c" "$dir/user_credentials.json"
+  echo true >"$dir/user_encrypt_installation.txt"
+  jq -n --arg disk "$BY_ID" --argjson reclaim "$reclaim" \
+    '{mode: "free_space", disk: $disk, reclaim_partuuids: $reclaim}' >"$dir/install_target.json"
+  rm -f "$RUN_DIR/cidata.img"
+  truncate -s 4M "$RUN_DIR/cidata.img"
+  mkfs.vfat -n CIDATA "$RUN_DIR/cidata.img" >/dev/null
+  mcopy -i "$RUN_DIR/cidata.img" "$dir"/* ::/
+  dd if="$RUN_DIR/cidata.img" of="$CIDATA_LIVE" conv=notrunc status=none
+  sync
+}
+
+# --------------------------------------------------------------- the runs
+
+boot_iso_next() {
+  local entry
+  entry=$(ssh_sudo "efibootmgr" | awk '/DVD|CDROM/ { print substr($1, 5, 4); exit }')
+  [[ -n $entry ]] || { echo "No DVD-ROM boot entry" >&2; return 1; }
+  ssh_sudo "efibootmgr --quiet --bootnext $entry && systemctl reboot" || true
+}
+
+# Wait for the installer to finish (or stop), then for the installed system's
+# LUKS prompt, type the passphrase, and wait for SSH.
+wait_for_install_and_unlock() {
+  local name="$1" waited=0 text
+  while true; do
+    text=$(ocr_screen)
+    if grep -qi "installation stopped" <<<"$text"; then
+      capture_console "failure-$name-stopped"
+      return 1
+    fi
+    grep -qi "Reboot Now" <<<"$text" && press ret
+    if grep -qiE "passphrase|password is required" <<<"$text"; then
+      capture_console "success-$name-luks-prompt"
+      type_text "$GUEST_PASSWORD"
+      press ret
+      break
+    fi
+    vm_running || { echo "VM exited during $name" >&2; return 1; }
+    if ((waited >= INSTALL_TIMEOUT)); then
+      capture_console "failure-$name-timeout"
+      return 1
+    fi
+    sleep 5
+    ((waited += 5))
+  done
+  wait_for_ssh 300 "failure-$name-ssh"
+  capture_console "success-$name-installed"
+}
+
+unlock_and_wait_for_ssh() {
+  wait_for_screen "password is required" 300
+  type_text "$GUEST_PASSWORD"
+  press ret
+  wait_for_ssh 300 "failure-unlock-ssh"
+}
+
+existing_partitions_unchanged() {
+  local label="$1"
+  ssh_sudo "sha256sum /dev/vda1 /dev/vda2 /dev/vda3" | cut -d' ' -f1 >"$RUN_DIR/$label.sha256"
+  check "$label: existing partitions hold the same bytes" cmp -s "$RUN_DIR/existing.sha256" "$RUN_DIR/$label.sha256"
+  ssh_sudo "sfdisk --dump /dev/vda" | awk -F': *' '/^\// { print tolower($2) }' >"$RUN_DIR/$label.sfdisk"
+  grep -F -f <(grep -o 'uuid=[0-9a-f-]*' "$RUN_DIR/existing.sfdisk") "$RUN_DIR/$label.sfdisk" >"$RUN_DIR/$label.sfdisk.existing" || true
+  check "$label: existing partition entries unchanged" cmp -s "$RUN_DIR/existing.sfdisk" "$RUN_DIR/$label.sfdisk.existing"
+}
+
+absent() {
+  ! grep -qi "$1" "$2"
+}
+
+one_limine_entry_on() {
+  [[ $(grep -ci 'limine' "$2") == 1 && $(grep -i 'limine' "$2" | grep -ci "$1") == 1 ]]
+}
+
+# Prints "<esp partuuid> <root partuuid>" of the running install.
+installed_partuuids() {
+  ssh_sudo 'lsblk -rno PARTUUID,PARTLABEL /dev/vda' |
+    awk '$2 == "OMARCHY_EFI" { e = $1 } $2 == "OMARCHY_ROOT" { r = $1 } END { print tolower(e), tolower(r) }'
+}
+
+collect() {
+  local label="$1"
+  ssh_sudo "cat /var/log/omarchy-install-timing.json" >"$RUN_DIR/$label-install-timing.json" 2>/dev/null || true
+  ssh_guest "timeout 120 systemctl is-system-running --wait >/dev/null; systemd-analyze" >"$RUN_DIR/$label-systemd-analyze.txt" 2>/dev/null || true
+  ssh_sudo "efibootmgr --verbose" >"$RUN_DIR/$label-efibootmgr.txt" 2>/dev/null || true
+  ssh_sudo "lsblk -o NAME,SIZE,TYPE,FSTYPE,PARTLABEL,PARTUUID,MOUNTPOINTS /dev/vda" >"$RUN_DIR/$label-lsblk.txt" 2>/dev/null || true
+}
+
+[[ -f $SSH_KEY ]] || ssh-keygen -t ed25519 -N "" -q -C "omarchy-integration" -f "$SSH_KEY"
+detect_packages
+build_disk
+cp "$OVMF_VARS_TEMPLATE" "$RUN_DIR/OVMF_VARS.4m.fd"
+ACTIVE_OVMF="$RUN_DIR/OVMF_VARS.4m.fd"
+
+log "1. Free-space install"
+truncate -s 4M "$CIDATA_LIVE"
+write_cidata '[]'
+start_vm "$DISK" "$RUN_DIR/serial.log" \
+  -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
+  -device ide-cd,drive=cdrom0,bootindex=2 \
+  -drive "file=$CIDATA_LIVE,format=raw,if=none,id=cidata" \
+  -device usb-storage,drive=cidata
+wait_for_install_and_unlock first
+collect first
+existing_partitions_unchanged first
+read -r esp1 root1 < <(installed_partuuids)
+check "first: OMARCHY_EFI and OMARCHY_ROOT exist" test -n "$esp1" -a -n "$root1"
+check "first: root is on LUKS" grep -q crypto_LUKS "$RUN_DIR/first-lsblk.txt"
+check "first: one Limine boot entry, on the new ESP" one_limine_entry_on "$esp1" "$RUN_DIR/first-efibootmgr.txt"
+
+log "2. A reclaim naming somebody's partition is refused"
+write_cidata "[\"$esp1\", \"$(existing_partuuid 2)\"]"
+boot_iso_next
+wait_for_screen "Installation stopped" 600
+capture_console "success-refused"
+ocr_screen >"$RUN_DIR/refused-screen.txt"
+check "refused: the ISO says what it refused" grep -qi "refusing to reclaim" "$RUN_DIR/refused-screen.txt"
+qmp '"system_reset"' >/dev/null
+unlock_and_wait_for_ssh
+collect refused
+existing_partitions_unchanged refused
+read -r esp root < <(installed_partuuids)
+check "refused: the first install is still there" test "$esp $root" = "$esp1 $root1"
+check "refused: its boot entry is still there" one_limine_entry_on "$esp1" "$RUN_DIR/refused-efibootmgr.txt"
+
+log "3. Reinstall over the first install"
+write_cidata "[\"$esp1\", \"$root1\"]"
+boot_iso_next
+wait_for_install_and_unlock second
+collect second
+existing_partitions_unchanged second
+read -r esp2 root2 < <(installed_partuuids)
+check "second: a new ESP and root" test -n "$esp2" -a -n "$root2" -a "$esp2" != "$esp1" -a "$root2" != "$root1"
+check "second: the first ESP is gone" absent "$esp1" "$RUN_DIR/second-lsblk.txt"
+check "second: the first root is gone" absent "$root1" "$RUN_DIR/second-lsblk.txt"
+check "second: one Limine boot entry, on the new ESP" one_limine_entry_on "$esp2" "$RUN_DIR/second-efibootmgr.txt"
+check "second: no boot entry points at the first ESP" absent "$esp1" "$RUN_DIR/second-efibootmgr.txt"
+ssh_guest "systemctl --failed --no-legend --plain" >"$RUN_DIR/second-failed-units.txt" 2>/dev/null || echo "query failed" >"$RUN_DIR/second-failed-units.txt"
+check "second: no failed units" test ! -s "$RUN_DIR/second-failed-units.txt"
+
+stop_vm
+rm -f "$DISK"
+finish

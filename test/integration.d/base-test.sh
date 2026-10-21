@@ -17,6 +17,8 @@ INSTALL_TIMEOUT="${OMARCHY_INTEGRATION_INSTALL_TIMEOUT:-2400}"
 # cache=none keeps the host page cache out of the guest's disk writes, so
 # install times measure the installer rather than the host (CI sets it).
 DISK_CACHE="${OMARCHY_INTEGRATION_DISK_CACHE:-}"
+# A serial gives the disk a stable /dev/disk/by-id name, as real disks have.
+DISK_SERIAL="${DISK_SERIAL:-}"
 NO_PREVIEW="${OMARCHY_INTEGRATION_NO_PREVIEW:-false}"
 BOOT_TIMEOUT=600
 
@@ -170,7 +172,7 @@ start_vm() {
     -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$ACTIVE_OVMF" \
     -drive file="$disk",format=qcow2,if=none,id=drive0${DISK_CACHE:+,cache=$DISK_CACHE} \
-    -device virtio-blk-pci,drive=drive0,bootindex=1 \
+    -device virtio-blk-pci,drive=drive0,bootindex=1${DISK_SERIAL:+,serial=$DISK_SERIAL} \
     -device virtio-vga \
     -display none \
     -usb -device usb-tablet \
