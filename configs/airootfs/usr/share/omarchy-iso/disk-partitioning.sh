@@ -134,7 +134,7 @@ rollback_created_parts() {
 detect_bitlocker() {
   local p sig
   for p in $(lsblk -lnpo NAME,TYPE "$disk" | awk '$2=="part"{print $1}'); do
-    sig=$(dd if="$p" bs=1 skip=3 count=8 status=none 2>/dev/null)
+    sig=$(dd if="$p" bs=1 skip=3 count=8 status=none 2>/dev/null | tr -d '\0')
     if [[ "$sig" == "-FVE-FS-" ]]; then
       echo "$p"
       return 0
