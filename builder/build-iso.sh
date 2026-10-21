@@ -228,7 +228,9 @@ CUSTOMIZE
   install -Dm0644 /builder/qualcomm/early-firmware.py "$build_cache_dir/airootfs/usr/lib/initcpio/qcom-early-firmware.py"
   rm -rf "$build_cache_dir/syslinux" "$build_cache_dir/efiboot"
 else
-  boot_splash_kernel_options="quiet splash "
+  # The installer is text-only: no audio or Bluetooth unless the screen reader
+  # entry asks for sound, which does not take these options.
+  boot_splash_kernel_options="quiet splash module_blacklist=snd,bluetooth "
   kernel_options="xe.enable_panel_replay=0 initramfs_async=0"
 fi
 for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg"; do
