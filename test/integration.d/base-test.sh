@@ -708,11 +708,15 @@ EOF
 }
 
 # The edge/dev/local ISO installs the -dev packages, as builder/build-iso.sh
-# picks them; a stable ISO the plain ones.
+# picks them; a stable ISO the plain ones. An aarch64 image with the N1x debug
+# key says -devssh in its name, which is no channel.
 detect_packages() {
+  local name
+  name=$(basename "$ISO")
+  name=${name/-devssh/}
   RUNTIME_PACKAGE=omarchy-dev
   SETTINGS_PACKAGE=omarchy-settings-dev
-  if [[ $(basename "$ISO") != *edge* && $(basename "$ISO") != *dev* && $(basename "$ISO") != *local* && $(basename "$ISO") != *pr* ]]; then
+  if [[ $name != *edge* && $name != *dev* && $name != *local* && $name != *pr* ]]; then
     RUNTIME_PACKAGE=omarchy
     SETTINGS_PACKAGE=omarchy-settings
   fi

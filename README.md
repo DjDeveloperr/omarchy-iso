@@ -28,7 +28,15 @@ curl -fsSLO "https://iso.omarchy.org/omarchy-$version.iso.sha256"
 sha256sum -c "omarchy-$version.iso.sha256"
 ```
 
-Use the `.sig` file to verify the ISO against the Omarchy signing key.
+The checksum only catches a corrupted download. The `.sig` file proves that Omarchy built the ISO. Fetch the Omarchy signing key by its full fingerprint, then verify the ISO with GnuPG:
+
+```bash
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
+curl -fsSLO "https://iso.omarchy.org/omarchy-$version.iso.sig"
+gpg --verify "omarchy-$version.iso.sig" "omarchy-$version.iso"
+```
+
+The output must say `Good signature from "Omarchy <pkgs@omarchy.org>"` and show the key `40DFB630FF42BCFFB047046CF0134EE680CAC571`. A warning that the key is not certified with a trusted signature is expected. It means only that you have not signed the key yourself.
 
 ### More in the manual
 
@@ -221,6 +229,22 @@ Despite the local folder name, the first argument is the Omarchy source checkout
 
 Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
 
+### aarch64
+
+```bash
+./bin/omarchy-iso-make --arch aarch64 --edge --local-source ../omarchy-installer ../omarchy-pkgs
+```
+
+One aarch64 image serves every board that installs from a USB stick. Apple Silicon Macs are not among them, since they are installed from macOS. The build chooses nothing. The installer asks the machine which platform it is on, with the runtime's own `omarchy-hw-platform`, and installs that platform's packages from the offline mirror, which carries them for every platform.
+
+An aarch64 image is built from the stable channel unless `--rc` or `--edge` names another, as on x86_64: Omarchy's aarch64 repository for that channel and its mirror of Arch Linux ARM (`arm-stable-mirror.omarchy.org`, `arm-rc-mirror.omarchy.org`, `arm-mirror.omarchy.org`), from `configs/pacman-online-aarch64-<channel>.conf`.
+
+The kernel is `linux-omarchy`, as on x86_64, and it is the only one an aarch64 image is built on. It comes from the channel's aarch64 repository. A package bundle (`--package-dir`) can put a kernel under test or pinned packages ahead of it, as [N1X.md](N1X.md) describes.
+
+Snapdragon laptops get no device tree from their firmware, so the live system also carries a UKI with one for every supported laptop, built from the device trees the kernel package ships. GRUB boots it by default where the processor is a Snapdragon, and systemd-stub picks the device tree by the machine's SMBIOS data. Every other machine boots the kernel directly.
+
+The runtime the image installs must have the platform detector and the Snapdragon hardware setup (`install/hardware/qualcomm/`), which lists those device trees for the installed system's own UKI. The build refuses a runtime without them. On a laptop that still has Windows, the installer copies the vendor-signed firmware off the Windows partition before the disk is written.
+
 ## Testing the ISO
 
 Run `./bin/omarchy-iso-boot [release/omarchy.iso]`.
@@ -264,6 +288,25 @@ The first scenario is `factory-reset`: it proves `omarchy-system-factory-reset` 
 `corrupt-image` proves a bad install medium is refused before the disk is touched. It copies the ISO and flips one byte a megabyte into the root image stream itself — addressed from the extent xorriso reports out of the ISO9660 directory records, so the damage lands in the shipped bytes and nowhere else — then autoinstalls from that copy: `omarchy-root-image-verify.service` (which hashes the image at boot, while a user would be in the configurator) must fail, the install must halt in its pre-flight phase with the "re-flash" advice on screen, and the target disk must still have no partition table. It boots the ISO itself rather than the base image, so it also works standalone with `OMARCHY_INTEGRATION_ISO` set.
 
 Artifacts — screenshots, the fixtured/staged/final `limine.conf`, the reset typescript, and the factory-reset log — land under `test-runs/<iso>-integration/runs/<timestamp>-<scenario>/`, and `--no-preview` skips the `imv` review just like the acceptance harness.
+
+## Upgrade testing
+
+`test/upgrade-test` checks what an existing user gets. It takes an installed system, moves it to another channel with `omarchy-channel-set`, reboots it, and checks what came back: the update's exit status, skipped migrations, that the reboot comes back by itself into an installed kernel, failed units, the desktop, the user's wallpaper and the boot menu.
+
+```bash
+./test/integration release/omarchy.iso boot                                # installs once, leaves the installed disk
+./test/upgrade-test test-runs/omarchy-integration edge upgrade-evidence    # edge or rc
+```
+
+The evidence folder gets `report.md`, the update's output, and a picture of the desktop before and after.
+
+The "Upgrade test" workflow does both steps from a release's ISO. Start it by hand, from the latest release to edge by default:
+
+```bash
+gh workflow run upgrade-test.yml -f to=edge
+```
+
+It only runs when started. When the branch it ran on has a pull request, the result is posted there as one comment and updated in place on later runs.
 
 ## Signing the ISO
 
