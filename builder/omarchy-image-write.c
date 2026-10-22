@@ -74,6 +74,10 @@ static uint8_t *zero_frame;
 static size_t zero_frame_size;
 static atomic_size_t next_frame, bytes_written, zero_frames;
 static atomic_int failed;
+/* Thread-nanoseconds, summed over the workers: decoding (including the page
+ * faults on the image), in pwrite, and checking for zeros (the compressed
+ * bytes against the zero frame, or a decoded frame for all zeros). */
+static atomic_uint_fast64_t decode_ns, write_ns, skip_ns;
 static volatile sig_atomic_t writing;
 
 static void die(int status, const char *fmt, ...)
@@ -270,6 +274,14 @@ static int all_zero(const uint8_t *p, size_t n)
 	return p[0] == 0 && memcmp(p, p + 1, n - 1) == 0;
 }
 
+static uint64_t now_ns(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+}
+
 static int pwrite_all(int fd, const uint8_t *p, size_t n, off_t off)
 {
 	while (n) {
@@ -303,6 +315,7 @@ static void *worker(void *arg)
 {
 	ZSTD_DCtx *dctx = ZSTD_createDCtx();
 	uint8_t *buf = NULL;
+	uint64_t decode = 0, write = 0, skip = 0, t0, t1;
 
 	(void)arg;
 	if (!dctx || posix_memalign((void **)&buf, ALIGN, max_dsize)) {
@@ -318,11 +331,15 @@ static void *worker(void *arg)
 		if (k >= nframes)
 			break;
 		f = &frames[k];
+		t0 = now_ns();
 		if (is_zero_frame(f)) {
 			atomic_fetch_add(&zero_frames, 1);
+			skip += now_ns() - t0;
 			continue;
 		}
 		n = ZSTD_decompressDCtx(dctx, buf, f->dsize, image + f->src, f->csize);
+		t1 = now_ns();
+		decode += t1 - t0;
 		if (ZSTD_isError(n) || n != f->dsize) {
 			fail("frame %zu: %s", k, ZSTD_isError(n) ?
 			     ZSTD_getErrorName(n) : "decoded to the wrong size");
@@ -330,9 +347,13 @@ static void *worker(void *arg)
 		}
 		if (all_zero(buf, n)) {
 			atomic_fetch_add(&zero_frames, 1);
+			skip += now_ns() - t1;
 			continue;
 		}
+		t0 = now_ns();
+		skip += t0 - t1;
 		err = pwrite_all(target_fd, buf, n, f->dst);
+		write += now_ns() - t0;
 		if (err) {
 			fail("write at byte %lld: %s", (long long)f->dst, strerror(-err));
 			break;
@@ -340,6 +361,9 @@ static void *worker(void *arg)
 		atomic_fetch_add(&bytes_written, n);
 	}
 out:
+	atomic_fetch_add(&decode_ns, decode);
+	atomic_fetch_add(&write_ns, write);
+	atomic_fetch_add(&skip_ns, skip);
 	free(buf);
 	ZSTD_freeDCtx(dctx);
 	return NULL;
@@ -363,12 +387,12 @@ static uint64_t target_size(int fd, const char *path)
 static int write_image(const char *path, const char *target, int threads)
 {
 	pthread_t tid[MAX_THREADS];
-	struct timespec t0, t1;
+	uint64_t t0, t1, t2, t3;
 	size_t size;
 	off_t total;
-	int i;
+	int i, started;
 
-	clock_gettime(CLOCK_MONOTONIC, &t0);
+	t0 = now_ns();
 	image = map_file(path, &size, REFUSED);
 	total = read_seek_table(size);
 	encode_zero_frame();
@@ -385,23 +409,36 @@ static int write_image(const char *path, const char *target, int threads)
 		die(FAILED, "%s: smaller than the %lld-byte image", target, (long long)total);
 
 	writing = 1;
+	t1 = now_ns();
 	for (i = 0; i < threads; i++)
 		if (pthread_create(&tid[i], NULL, worker, NULL))
 			break;
 	if (i == 0)
 		die(FAILED, "cannot start a thread");
+	started = i;
 	while (i--)
 		pthread_join(tid[i], NULL);
+	t2 = now_ns();
 	if (atomic_load(&failed))
 		return FAILED;
 	if (fsync(target_fd) || close(target_fd))
 		die(FAILED, "%s: %s", target, strerror(errno));
+	t3 = now_ns();
 
-	clock_gettime(CLOCK_MONOTONIC, &t1);
 	fprintf(stderr, "omarchy-image-write: wrote %.2f of %.2f GiB (%zu frames, %zu zero, %d threads) in %.2f s\n",
 		atomic_load(&bytes_written) / 1073741824.0, total / 1073741824.0, nframes,
-		atomic_load(&zero_frames), threads,
-		(t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
+		atomic_load(&zero_frames), threads, (t3 - t0) / 1e9);
+	/*
+	 * Where the time went: before the first frame, the frames, the final
+	 * flush; and the workers' thread-seconds, so a slow install says whether
+	 * the drive (writing) or the CPU (decoding) held it up.
+	 */
+	fprintf(stderr, "omarchy-image-write: setup %.3f s, frames %.3f s (%.2f GiB/s), fsync %.3f s; "
+		"thread-seconds decoding %.2f, writing %.2f, skipping %.2f, of %.2f\n",
+		(t1 - t0) / 1e9, (t2 - t1) / 1e9,
+		t2 > t1 ? atomic_load(&bytes_written) / 1073741824.0 / ((t2 - t1) / 1e9) : 0,
+		(t3 - t2) / 1e9, atomic_load(&decode_ns) / 1e9, atomic_load(&write_ns) / 1e9,
+		atomic_load(&skip_ns) / 1e9, started * (t2 - t1) / 1e9);
 	return 0;
 }
 
