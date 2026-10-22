@@ -79,7 +79,7 @@ SMBIOS=()
 # --acpi-hid HID: an ACPI device with that _HID, e.g. OVTI08F4 (the IPU7
 # camera sensor omarchy keys the camera package on).
 # --no-network: no NIC at all. The harness then cannot reach the guest over
-# SSH, so it stops after the install finished and first boot unlocked.
+# SSH, so it stops once the installed system booted to its console login.
 CPU_ID=""
 BATTERY=false
 ACPI_HIDS=()
@@ -1050,6 +1050,32 @@ unlock_luks() {
   done
 }
 
+# With no NIC there is no SSH to wait for, so the first boot has to show on
+# screen that it came up: a console login under the installed hostname. The
+# live ISO's own getty has another name, so its prompt while the reboot is
+# still going does not count.
+wait_for_first_boot_login() {
+  log "Waiting for the installed system's console login"
+
+  local waited=0
+  until ocr_screen | grep -qi "$GUEST_HOSTNAME login:"; do
+    if ! vm_running; then
+      echo "VM exited before the installed system reached a login" >&2
+      return 1
+    fi
+
+    if ((waited >= BOOT_TIMEOUT)); then
+      capture_console "failure-first-boot-no-login"
+      echo "Timed out after ${BOOT_TIMEOUT}s waiting for the $GUEST_HOSTNAME login" >&2
+      return 1
+    fi
+
+    press ctrl-alt-f3
+    sleep 10
+    ((waited += 10))
+  done
+}
+
 # Log into a spare console TTY as the user and authorize the harness SSH key —
 # the same thing a person would do to give themselves remote access.
 bootstrap_ssh() {
@@ -1238,9 +1264,11 @@ install_phase() {
     unlock_luks
   fi
   if $NO_NETWORK; then
-    # Nothing to SSH through. The install finished and the first boot got past
-    # the passphrase; that is what a machine with no NIC has to show.
-    log "No network: the installed system unlocked; stopping here."
+    # Nothing to SSH through. The install finished and the installed system
+    # booted to its console login; that is what a machine with no NIC has to
+    # show.
+    wait_for_first_boot_login
+    log "No network: the installed system booted to its login; stopping here."
     capture_console "success-first-boot-no-network"
     return 0
   fi
