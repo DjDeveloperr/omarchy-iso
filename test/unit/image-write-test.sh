@@ -219,7 +219,7 @@ run write "$image" "$work/missing-target"
 [[ $status == 1 && ! -e $work/missing-target ]] || fail "fails on a missing target without creating it" "status $status"
 pass "fails on a missing target without creating it"
 
-for args in "" "write" "write $image" "write $image $work/target 0" "write $image $work/target 65" "unpack $raw $image"; do
+for args in "" "write" "write $image" "write $image $work/target 0" "write $image $work/target 65" "write $image $work/target 4x" "write $image $work/target 4294967297" "unpack $raw $image"; do
   # shellcheck disable=SC2086
   run $args
   [[ $status == 2 ]] || fail "refuses bad arguments: '$args'" "status $status"

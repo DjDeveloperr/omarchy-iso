@@ -452,8 +452,14 @@ int main(int argc, char **argv)
 		long cpus = sysconf(_SC_NPROCESSORS_ONLN);
 		int threads = cpus < 1 ? 1 : cpus > 16 ? 16 : cpus;
 
-		if (argc == 5)
-			threads = atoi(argv[4]);
+		if (argc == 5) {
+			char *end;
+			long n;
+
+			errno = 0;
+			n = strtol(argv[4], &end, 10);
+			threads = errno || end == argv[4] || *end || n < 1 || n > MAX_THREADS ? 0 : n;
+		}
 		if (threads < 1 || threads > MAX_THREADS)
 			die(REFUSED, "threads: 1 to %d", MAX_THREADS);
 		return write_image(argv[2], argv[3], threads);
