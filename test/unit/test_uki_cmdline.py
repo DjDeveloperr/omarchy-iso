@@ -89,6 +89,16 @@ class EmbedCmdlineTest(unittest.TestCase):
         self.path.write_bytes(b"not a PE image" * 10)
         self.assertFalse(embed_cmdline(self.path, REAL))
 
+    def test_a_truncated_image_is_refused_untouched(self):
+        # Cut inside the COFF header, inside the .cmdline section table entry,
+        # and inside the .cmdline section itself (after the placeholder).
+        for cut in (0x80 + 10, 0x80 + 24 + 0xF0 + 13, SECTION + 900):
+            with self.subTest(cut=hex(cut)):
+                before = with_room()[:cut]
+                self.path.write_bytes(before)
+                self.assertFalse(embed_cmdline(self.path, REAL))
+                self.assertEqual(self.path.read_bytes(), before)
+
     def test_the_image_build_reserves_the_room(self):
         build = (ROOT / "builder/build-root-image.sh").read_text()
         self.assertIn(PLACEHOLDER, build)
