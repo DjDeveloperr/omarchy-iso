@@ -68,7 +68,8 @@ from .ui import info
 # stop at startup and say so, before a replaced internal misbehaves in the
 # middle of an install. OMARCHY_ARCHINSTALL_UNTESTED=1 runs anyway, which is
 # how a new release gets tried.
-TESTED_ARCHINSTALL = "4.4"
+# Releases whose internals this module was checked against (major.minor).
+TESTED_ARCHINSTALL = ("4.4", "4.5")
 
 
 def check_archinstall_version(version: str | None = None) -> None:
@@ -78,11 +79,11 @@ def check_archinstall_version(version: str | None = None) -> None:
             version = package_version("archinstall")
         except PackageNotFoundError:
             version = "unknown"
-    if version.split(".")[:2] == TESTED_ARCHINSTALL.split(".")[:2]:
+    if ".".join(version.split(".")[:2]) in TESTED_ARCHINSTALL:
         return
     message = (
         f"archinstall {version} is installed, but this installer is tested against "
-        f"archinstall {TESTED_ARCHINSTALL}: it replaces archinstall internals that "
+        f"archinstall {' and '.join(TESTED_ARCHINSTALL)}: it replaces archinstall internals that "
         f"change between releases (orchestrator/archinstall_adapter.py)"
     )
     if os.environ.get("OMARCHY_ARCHINSTALL_UNTESTED") == "1":
