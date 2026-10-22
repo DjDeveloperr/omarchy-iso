@@ -452,7 +452,12 @@ EOF
 
     type_text "$GUEST_USER"
     press ret
-    wait_for_screen "Password" 60
+    # The VT can switch away before the prompt shows; that loses this
+    # attempt, not the scenario.
+    if ! wait_for_screen "Password" 60; then
+      log "No password prompt after the username (attempt $attempt); retrying on the next VT"
+      continue
+    fi
     type_text "$GUEST_PASSWORD"
     press ret
     sleep 3
@@ -790,6 +795,7 @@ wait_for_unattended_install() {
         press ret
         blank_screens=0
         sleep 10
+        ((waited += 10))
         continue
       fi
     else

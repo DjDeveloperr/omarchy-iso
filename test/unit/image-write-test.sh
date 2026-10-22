@@ -118,6 +118,19 @@ grep -q "(11 frames, 2 zero, 11 cached, 8 threads)" "$work/stderr" ||
   fail "write reports what it did" "$(cat "$work/stderr")"
 pass "write reports what it did"
 
+# The split the installer log keeps: wall time by stage, and the workers'
+# thread-seconds by activity, which cannot add up to more than the threads had.
+python3 - "$work/stderr" <<'PY' || fail "write reports where its time went" "$(cat "$work/stderr")"
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r"setup ([\d.]+) s, frames ([\d.]+) s \([\d.]+ GiB/s\), fsync ([\d.]+) s; "
+              r"thread-seconds decoding ([\d.]+), writing ([\d.]+), skipping ([\d.]+), of ([\d.]+)$", text, re.M)
+assert m, "no timing line"
+decoding, writing, skipping, available = map(float, m.groups()[3:])
+assert decoding + writing + skipping <= available + 0.02, m.group(0)
+PY
+pass "write reports where its time went"
+
 # Frames whose bytes the page cache holds are written first, the rest after.
 # The order must never change what lands on the target, and the count must
 # follow the cache. On a disk-backed directory: tmpfs pages cannot be dropped.
@@ -239,7 +252,7 @@ run write "$image" "$work/missing-target"
 [[ $status == 1 && ! -e $work/missing-target ]] || fail "fails on a missing target without creating it" "status $status"
 pass "fails on a missing target without creating it"
 
-for args in "" "write" "write $image" "write $image $work/target 0" "write $image $work/target 65" "unpack $raw $image"; do
+for args in "" "write" "write $image" "write $image $work/target 0" "write $image $work/target 65" "write $image $work/target 4x" "write $image $work/target 4294967297" "unpack $raw $image"; do
   # shellcheck disable=SC2086
   run $args
   [[ $status == 2 ]] || fail "refuses bad arguments: '$args'" "status $status"
