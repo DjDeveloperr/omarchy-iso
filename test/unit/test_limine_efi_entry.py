@@ -1,7 +1,8 @@
 """Unit tests for _register_limine_efi_entry against a fake efibootmgr.
 
 The fake keeps NVRAM in a JSON file and behaves like efibootmgr 18: a listing
-prints each entry's device path after its label, --create takes the lowest free
+(plain or --verbose, as the orchestrator asks) prints each entry's device path
+after its label, --create takes the lowest free
 number and puts it first in BootOrder, --delete-bootnum frees the number again,
 --bootnext refuses a number that has no entry.
 A fake lsblk answers the ESP's partition GUID.
@@ -39,14 +40,21 @@ import json, os, sys
 path = os.environ["FAKE_NVRAM"]
 nvram = json.load(open(path))
 args = sys.argv[1:]
-if not args:
+if args in ([], ["--verbose"], ["-v"]):
     if "next" in nvram:
         print("BootNext: " + nvram["next"])
     print("BootCurrent: 0001")
     print("BootOrder: " + ",".join(nvram["order"]))
     for num, (label, dp) in sorted(nvram["entries"].items()):
-        print(f"Boot{num}* {label}\t{dp}")
+        # FAKE_NO_PATHS: an efibootmgr that lists labels only.
+        print(f"Boot{num}* {label}" if os.environ.get("FAKE_NO_PATHS") else f"Boot{num}* {label}\t{dp}")
     sys.exit(0)
+if "--create" in args and os.environ.get("FAKE_REFUSE_CREATE"):
+    print("Could not prepare Boot variable: Invalid argument", file=sys.stderr)
+    sys.exit(2)
+if "--delete-bootnum" in args and os.environ.get("FAKE_REFUSE_DELETE"):
+    print("Could not delete variable: Permission denied", file=sys.stderr)
+    sys.exit(3)
 if "--create" in args:
     get = lambda flag: args[args.index(flag) + 1]
     guids = json.loads(os.environ["FAKE_GUIDS"])
@@ -182,6 +190,34 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertNotIn("next", nvram)
         self.assertEqual(nvram["order"], [ours, "0004"])
         self.assertTrue(any("BootNext" in message for message in errors), errors)
+
+    def test_a_label_only_listing_deletes_nothing(self):
+        # Without device paths no entry can be shown to be this ESP's.
+        self.nvram_with({"0004": self.entry("Limine", OTHER), "0003": self.entry("Limine", OURS, part=3)}, ["0004", "0003"])
+        with mock.patch.dict(os.environ, {"FAKE_NO_PATHS": "1"}):
+            nvram = self.register()
+        self.assertIn("0004", nvram["entries"])
+        self.assertIn("0003", nvram["entries"])
+
+    def test_a_refused_delete_does_not_stop_the_install(self):
+        self.nvram_with({"0003": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)}, ["0003", "0004"])
+        with mock.patch.dict(os.environ, {"FAKE_REFUSE_DELETE": "1"}), \
+                mock.patch.object(phases_impl, "error", lambda _message: None):
+            nvram = self.register()
+        # The old entry could not be deleted, so the new one took the lowest
+        # free number; it boots first and the old one is left behind it.
+        self.assertEqual(nvram["entries"]["0000"], self.entry("Limine", OURS, part=3))
+        self.assertIn("0003", nvram["entries"])
+        self.assertEqual(nvram["order"][0], "0000")
+
+    def test_a_refused_create_leaves_other_installs_alone(self):
+        self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_REFUSE_CREATE": "1"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            nvram = self.register()
+        self.assertEqual(nvram, {"entries": {"0004": self.entry("Limine", OTHER)}, "order": ["0004"]})
+        self.assertEqual(len(warnings), 1)
 
     def test_created_entry_reusing_a_deleted_number_is_found(self):
         self.nvram_with({"0000": self.entry("Limine", OURS, part=3)}, ["0000"])
