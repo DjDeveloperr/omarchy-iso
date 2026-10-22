@@ -6,6 +6,10 @@ disk uses that partition's EFI/BOOT/BOOTX64.EFI, so Omarchy claims it and
 keeps a boot route that survives firmware refusing or discarding the
 "Limine" NVRAM entry.
 
+A protected target handed over some other way (an autoinstall config with
+a pre-mounted target) may sit on an ESP another OS uses, so there the
+fallback stays off unless the config asks for it.
+
 Covers the install intent that turns the fallback on, the
 ENABLE_LIMINE_FALLBACK line it produces in /etc/default/limine,
 validate_boot's handling of each combination of the two routes, and
@@ -75,6 +79,8 @@ PROTECTED_INSTALL = {
         "esp_mount": "/boot",
         "esp_path": "/EFI/limine",
         "efi_binary": "limine_x64.efi",
+        # What the configurator writes for the ESP it creates.
+        "enable_fallback": True,
     },
     "storage": {
         "esp_device": "/dev/nvme0n1p6",
@@ -87,17 +93,27 @@ PROTECTED_INSTALL = {
 
 
 class BootIntentTest(unittest.TestCase):
-    """The fallback is on for a free-space install, not only a full-disk one."""
+    """The fallback is on for a free-space install, not only a full-disk one,
+    and off for a protected target nobody said Omarchy owns the ESP of."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
 
-    def test_protected_install_enables_the_fallback_by_default(self):
+    def test_the_configurators_free_space_install_enables_the_fallback(self):
         ctx = make_ctx(self.dir, json.loads(json.dumps(PROTECTED_INSTALL)))
         self.assertTrue(ctx.is_protected)
         self.assertTrue(phases_impl._boot_intent(ctx)["enable_fallback"])
+
+    def test_a_supplied_protected_target_leaves_the_removable_path_alone(self):
+        # Its esp_device may be another OS's ESP, whose EFI/BOOT/BOOTX64.EFI
+        # is not ours to replace.
+        install = json.loads(json.dumps(PROTECTED_INSTALL))
+        del install["boot"]["enable_fallback"]
+        ctx = make_ctx(self.dir, install)
+        self.assertTrue(ctx.is_protected)
+        self.assertFalse(phases_impl._boot_intent(ctx)["enable_fallback"])
 
     def test_full_disk_install_still_enables_the_fallback(self):
         ctx = make_ctx(self.dir, {"mode": "full_disk", "boot": {}, "storage": {}})
@@ -110,9 +126,14 @@ class BootIntentTest(unittest.TestCase):
         ctx = make_ctx(self.dir, install)
         self.assertFalse(phases_impl._boot_intent(ctx)["enable_fallback"])
 
-    def test_pre_mounted_config_without_omarchy_install_enables_the_fallback(self):
+    def test_pre_mounted_config_without_omarchy_install_leaves_the_removable_path_alone(self):
         default = _default_omarchy_install({"disk_config": {"config_type": "pre_mounted_config"}})
         self.assertEqual(default["mode"], "protected")
+        self.assertFalse(default["boot"]["enable_fallback"])
+
+    def test_full_disk_config_without_omarchy_install_enables_the_fallback(self):
+        default = _default_omarchy_install({"disk_config": {"config_type": "default_layout"}})
+        self.assertEqual(default["mode"], "full_disk")
         self.assertTrue(default["boot"]["enable_fallback"])
 
 
@@ -144,6 +165,11 @@ class LimineDefaultsTest(unittest.TestCase):
         text = self.write_defaults(json.loads(json.dumps(PROTECTED_INSTALL)))
         self.assertIn("ENABLE_LIMINE_FALLBACK=yes", text)
         self.assertNotIn("ENABLE_LIMINE_FALLBACK=no", text)
+
+    def test_supplied_protected_target_writes_no(self):
+        install = json.loads(json.dumps(PROTECTED_INSTALL))
+        del install["boot"]["enable_fallback"]
+        self.assertIn("ENABLE_LIMINE_FALLBACK=no", self.write_defaults(install))
 
     def test_explicit_false_writes_no(self):
         install = json.loads(json.dumps(PROTECTED_INSTALL))

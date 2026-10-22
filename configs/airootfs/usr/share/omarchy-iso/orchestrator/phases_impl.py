@@ -1637,15 +1637,15 @@ def _boot_intent(ctx: InstallContext) -> dict:
     boot.setdefault("esp_mount", "/boot")
     boot.setdefault("esp_path", "/EFI/limine")
     boot.setdefault("efi_binary", _default_limine_efi_binary())
-    # Protected installs used to default this off, from a time when a
-    # free-space install could adopt the Windows ESP and claiming
-    # EFI/BOOT/BOOTX64.EFI there would have displaced the Windows loader.
-    # The configurator stopped adopting that ESP in "Always create our own
-    # ESP" (ef3b0e4): protected mode now formats a dedicated FAT32 ESP in
-    # free space, where the removable path is unused and ours to claim. It
-    # is also the only path left when firmware refuses or discards the
-    # "Limine" boot variable, so both modes take it.
-    boot.setdefault("enable_fallback", True)
+    # The removable path EFI/BOOT/BOOTX64.EFI is the only route left when
+    # firmware refuses or discards the "Limine" boot variable. A full-disk
+    # install owns its ESP, so it always takes it. So does a free-space
+    # install from the configurator, which formats a dedicated FAT32 ESP
+    # in free space ("Always create our own ESP", ef3b0e4) and says so with
+    # enable_fallback: true. Any other protected target is a pre-mounted one
+    # handed over as it is, whose esp_device may be another OS's ESP and its
+    # removable loader that OS's, so it is left alone unless asked for.
+    boot.setdefault("enable_fallback", not ctx.is_protected)
     return boot
 
 
