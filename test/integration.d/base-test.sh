@@ -775,6 +775,14 @@ wait_for_unattended_install() {
       return 0
     fi
 
+    # Checked first, so every branch below that types and waits (the
+    # passphrase prompts) counts against the budget too.
+    if ((waited >= INSTALL_TIMEOUT)); then
+      capture_console "failure-$prefix-timeout"
+      echo "Timed out after ${INSTALL_TIMEOUT}s waiting for install" >&2
+      return 1
+    fi
+
     text=$(ocr_screen)
 
     # An encrypted install reboots into a passphrase prompt, which nothing
@@ -787,6 +795,7 @@ wait_for_unattended_install() {
       type_text "$GUEST_PASSWORD"
       press ret
       sleep 10
+      ((waited += 10))
       continue
     fi
 
@@ -839,12 +848,6 @@ wait_for_unattended_install() {
 
     if ! vm_running; then
       echo "VM exited during install" >&2
-      return 1
-    fi
-
-    if ((waited >= INSTALL_TIMEOUT)); then
-      capture_console "failure-$prefix-timeout"
-      echo "Timed out after ${INSTALL_TIMEOUT}s waiting for install" >&2
       return 1
     fi
 
