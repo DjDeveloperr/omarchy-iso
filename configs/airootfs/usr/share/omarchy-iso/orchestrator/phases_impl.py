@@ -2002,24 +2002,33 @@ def _run_timing_scripts(cmd: list[str]) -> None:
     for a phase that runs about 50 scripts in 3 s. It prints them unbuffered as
     each script starts and ends, so the time they arrive here is the script's
     own. The output goes where it went before, stderr folded into stdout as
-    the dashboard already merges them."""
+    the dashboard already merges them.
+
+    An interrupt or a failed write stops and reaps the child before it
+    propagates, as subprocess.run does: the caller unmounts the log and tears
+    the target down next, which must not race a setup still running."""
     out = sys.stdout.buffer
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     started: dict[bytes, float] = {}
-    for line in proc.stdout:
-        now = time.monotonic()
-        out.write(line)
-        out.flush()
-        match = _OMARCHY_SCRIPT_LINE.match(line)
-        if not match:
-            continue
-        event, script = match.groups()
-        if event == b"Starting":
-            started[script] = now
-        elif script in started:
-            name = script.decode(errors="replace").removeprefix("/usr/share/omarchy/install/")
-            info(f"[step] {name}: {now - started.pop(script):.6f}s")
-    returncode = proc.wait()
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
+        try:
+            for line in proc.stdout:
+                now = time.monotonic()
+                out.write(line)
+                out.flush()
+                match = _OMARCHY_SCRIPT_LINE.match(line)
+                if not match:
+                    continue
+                event, script = match.groups()
+                if event == b"Starting":
+                    started[script] = now
+                elif script in started:
+                    name = script.decode(errors="replace").removeprefix("/usr/share/omarchy/install/")
+                    info(f"[step] {name}: {now - started.pop(script):.6f}s")
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        returncode = proc.wait()
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, cmd)
 
