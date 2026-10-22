@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -129,6 +130,37 @@ class VerifyRootImageStreamTest(unittest.TestCase):
         with self.helper_returns(3, stdout="", stderr=""):
             with self.assertRaisesRegex(RuntimeError, "status 3"):
                 phases_impl.verify_root_image_stream(self.ctx)
+
+    def test_helper_runs_while_the_hash_is_still_going(self):
+        # A medium that stopped answering leaves the unit activating until its
+        # size-based timeout (here 3 s). The helper's stall check must get to
+        # run during that wait, not after the progress mirroring has sat it out.
+        with tempfile.TemporaryDirectory() as tmp:
+            stream = Path(tmp) / "omarchy-root.img.zst"
+            stream.write_bytes(b"\0" * 4096)
+            began = time.monotonic()
+
+            def unit_property(prop, unit=None):
+                if prop != "ActiveState":
+                    return "0"
+                return "activating" if time.monotonic() - began < 3 else "failed"
+
+            helper_started = []
+
+            def stalled_helper(cmd, **kwargs):
+                helper_started.append(time.monotonic() - began)
+                return CompletedProcess(cmd, 1, stdout="", stderr="install medium stopped responding")
+
+            with mock.patch.object(phases_impl, "ROOT_IMAGE_RAW_ZST", stream), \
+                 mock.patch.object(phases_impl, "MIRROR_SUMS", Path(tmp) / "no-sums"), \
+                 mock.patch.object(phases_impl, "_verify_unit_property", side_effect=unit_property), \
+                 mock.patch.object(phases_impl, "_write_phase_progress"), \
+                 mock.patch.object(phases_impl.subprocess, "run", side_effect=stalled_helper):
+                with self.assertRaisesRegex(RuntimeError, "stopped responding"):
+                    phases_impl.verify_root_image_stream(self.ctx)
+                finished = time.monotonic() - began
+        self.assertLess(helper_started[0], 1)
+        self.assertLess(finished, 2)
 
     def test_missing_helper_fails_the_install(self):
         with mock.patch.object(phases_impl.subprocess, "run",

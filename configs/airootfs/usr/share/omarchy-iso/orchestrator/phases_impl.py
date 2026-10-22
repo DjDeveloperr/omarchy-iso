@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -364,8 +365,15 @@ def verify_root_image_stream(ctx: InstallContext) -> None:
     scheduler. The free-space configurator gate runs the same helper before it
     partitions, so both disk-touching paths clear the same check; whoever gets
     there first pays the wait. The hasher's read also leaves as much of the
-    stream as fits in the page cache for the unpack that follows."""
-    _publish_verify_progress(ctx)
+    stream as fits in the page cache for the unpack that follows.
+
+    The progress mirroring runs beside the helper, not before it: it waits as
+    long as a hasher is activating, and a medium that stopped answering keeps
+    it there until the size-based timeout, while the helper says so after a
+    minute without progress."""
+    helper_done = threading.Event()
+    progress = threading.Thread(target=_publish_verify_progress, args=(ctx, helper_done), daemon=True)
+    progress.start()
     try:
         result = subprocess.run(
             [ROOT_IMAGE_VERIFY_HELPER],
@@ -373,6 +381,9 @@ def verify_root_image_stream(ctx: InstallContext) -> None:
         )
     except OSError as exc:
         raise RuntimeError(f"could not run {ROOT_IMAGE_VERIFY_HELPER}: {exc}") from exc
+    finally:
+        helper_done.set()
+        progress.join()
 
     for line in result.stdout.splitlines():
         if line.strip():
@@ -385,14 +396,18 @@ def verify_root_image_stream(ctx: InstallContext) -> None:
         )
 
 
-def _publish_verify_progress(ctx: InstallContext) -> None:
+def _publish_verify_progress(ctx: InstallContext, helper_done: threading.Event | None = None) -> None:
     """While the boot-time hashers are still reading the medium, mirror how far
     they are into phase_progress so the dashboard tracks the actual hash
     instead of the phase's time-driven band: the package mirror first, then the
     root image (the order their units run in), as one fraction of the bytes
     both read. Best effort throughout: the helper is the authority on the
     verdict, and any hiccup here (unit already done, hasher between opens,
-    /proc gone) just skips a sample."""
+    /proc gone) just skips a sample. Stops once helper_done is set: the
+    helper has its verdict, even if a hasher is still activating."""
+    def hashing(state: str) -> bool:
+        return state == "activating" and not (helper_done and helper_done.is_set())
+
     try:
         image = _root_image_verified().stat().st_size
     except OSError:
@@ -402,7 +417,7 @@ def _publish_verify_progress(ctx: InstallContext) -> None:
     total = image + mirror_total
     if mirror:
         state = _verify_state_when_started(MIRROR_VERIFY_UNIT)
-        while state == "activating":
+        while hashing(state):
             done = _mirror_bytes_hashed(mirror)
             if done is not None:
                 _write_phase_progress(ctx, done / total)
@@ -413,7 +428,7 @@ def _publish_verify_progress(ctx: InstallContext) -> None:
         image_state = _verify_state_when_started(ROOT_IMAGE_VERIFY_UNIT)
     else:
         image_state = _verify_unit_property("ActiveState")
-    while image and image_state == "activating":
+    while image and hashing(image_state):
         pos = _hasher_read_pos()
         if pos is not None:
             _write_phase_progress(ctx, (mirror_total + pos) / total)
