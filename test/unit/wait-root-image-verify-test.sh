@@ -125,7 +125,9 @@ if [[ \$1 == show ]]; then
   esac
   exit 0
 fi
-if [[ \$1 == start ]]; then exit \$start_rc; fi
+# START_SLEEP: seconds systemctl start takes to return, as a real start
+# waits for the oneshot it starts to exit.
+if [[ \$1 == start ]]; then sleep ${START_SLEEP:-0}; exit \$start_rc; fi
 exit 0
 EOF
   chmod +x "$box"/bin/*
@@ -213,6 +215,20 @@ check "timed-out unit is a slow medium" 1 "$RC" "install medium is too slow" "$O
 run_helper loaded $'activating\ndeactivating\ndeactivating\nfailed' 0 timeout
 check "a unit still stopping is waited out, not called unrunnable" 1 "$RC" \
   "install medium is too slow" "$OUT"
+
+# A unit the helper has to start itself is watched for a stall too: systemctl
+# start waits for the oneshot to exit, so blocking on it would wait out the
+# size-based timeout instead (here a start that takes 30 s).
+began=$SECONDS
+STALL=1 WITH_HASHER_PROC=1 START_SLEEP=30 run_helper loaded $'inactive\nactivating' 0
+check "a stall in a unit the helper started is reported" 1 "$RC" "install medium stopped responding" "$OUT"
+((SECONDS - began < 15)) && echo "ok: the stall is reported without waiting for systemctl start" ||
+  { echo "FAIL: the stall took $((SECONDS - began)) s to report: the wait sat in systemctl start"; fails=1; }
+
+# Inactive while that start is still waiting is its job queued, not a unit
+# that will not run.
+START_SLEEP=2 run_helper loaded $'inactive\ninactive\nactive' 0
+check "a queued start is waited for" 0 "$RC" "" "$OUT"
 
 # Never started and start leaves it inactive: cannot verify.
 run_helper loaded "inactive" 0

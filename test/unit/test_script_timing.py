@@ -68,6 +68,30 @@ class RunTimingScriptsTest(unittest.TestCase):
         self.assertEqual(caught.exception.returncode, 3)
         self.assertIn("stderr line\n", self.output)
 
+    def test_an_interrupt_stops_and_reaps_the_finalizer(self):
+        # Ctrl-C arrives while a line is being passed through. The finalizer
+        # must not keep changing the target the caller is about to tear down.
+        class InterruptingOutput:
+            def write(self, line):
+                raise KeyboardInterrupt
+
+        procs = []
+        real_popen = subprocess.Popen
+
+        def recording_popen(*args, **kwargs):
+            procs.append(real_popen(*args, **kwargs))
+            return procs[-1]
+
+        stdout = types.SimpleNamespace(buffer=InterruptingOutput())
+        with mock.patch.object(phases_impl.sys, "stdout", stdout), \
+             mock.patch.object(phases_impl.subprocess, "Popen", recording_popen):
+            with self.assertRaises(KeyboardInterrupt):
+                phases_impl._run_timing_scripts(["bash", "-c", "echo started; exec sleep 30"])
+        proc = procs[0]
+        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
+        self.assertIsNotNone(proc.returncode, "the finalizer was left running")
+        self.assertEqual(proc.returncode, -9)
+
 
 if __name__ == "__main__":
     unittest.main()

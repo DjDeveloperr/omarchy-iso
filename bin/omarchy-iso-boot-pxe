@@ -18,7 +18,8 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/netboot.sh"
 ISO=""
 REUSE=""
 SSH_PORT="${OMARCHY_VM_SSH_PORT:-2222}"
-WORK="${OMARCHY_VM_PXE_DIR:-/tmp/omarchy-pxe-boot}"
+# In our own cache, not a fixed /tmp name another user could create first.
+WORK="${OMARCHY_VM_PXE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-iso-boot-pxe}"
 EXTRA_QEMU_ARGS=()
 
 usage() {
@@ -105,7 +106,7 @@ fi
 
 TFTP_ROOT="$WORK/tftp"
 DISK="$WORK/disk.qcow2"
-mkdir -p "$WORK"
+private_work_dir "$WORK" "$DISK"
 
 echo "Assembling the TFTP root from $ISO (cached until the ISO changes)"
 assemble_tftp_root "$ISO" "$TFTP_ROOT"

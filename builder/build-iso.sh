@@ -230,13 +230,11 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # kernel package ships; GRUB chainloads it where there is one
   # (configs/grub/grub.cfg).
   install -Dm0644 /builder/qualcomm/live-uki.sh "$build_cache_dir/airootfs/root/qualcomm-live-uki.sh"
-  cat >"$build_cache_dir/airootfs/root/customize_airootfs.sh" <<CUSTOMIZE
-#!/bin/bash
-set -euo pipefail
-bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL
-rm -f /root/qualcomm-live-uki.sh
-CUSTOMIZE
-  chmod 0755 "$build_cache_dir/airootfs/root/customize_airootfs.sh"
+  # Into the live root's customize_airootfs.sh, ahead of its pruning of the
+  # mirror, which can end the script early.
+  customize="$build_cache_dir/airootfs/root/customize_airootfs.sh"
+  grep -qx 'set -euo pipefail' "$customize" || { echo "ERROR: $customize has no 'set -euo pipefail' line to start after" >&2; exit 1; }
+  sed -i "0,/^set -euo pipefail\$/s||set -euo pipefail\\n\\n# The Snapdragon laptops' live UKI.\\nbash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL\\nrm -f /root/qualcomm-live-uki.sh|" "$customize"
   # Keep the existing late-start path when early firmware is unavailable.
   install -Dm0755 /builder/qualcomm/omarchy-live-dsp "$build_cache_dir/airootfs/usr/local/bin/omarchy-live-dsp"
   install -Dm0644 /builder/qualcomm/omarchy-live-dsp.service "$build_cache_dir/airootfs/etc/systemd/system/omarchy-live-dsp.service"
@@ -927,17 +925,19 @@ image_package_index() {
 # tooling (about 180 packages, 125 MB), downloaded because
 # the live root is pacstrapped from this mirror and then left in it.
 if ! installable_files="$(
-  pacman --config "/configs/pacman-online-${OMARCHY_MIRROR}.conf" --noconfirm \
+  pacman --config "$online_pacman_conf" --noconfirm \
     --dbpath /tmp/offlinedb -S --print --print-format '%f' "${target_packages[@]}"
 )"; then
   echo "ERROR: could not resolve the packages an install can ask for" >&2
   exit 1
 fi
 shipped_list="$build_cache_dir/airootfs/usr/share/omarchy-iso/offline-mirror.shipped"
+# archlinuxarm-keyring stays too, with its signature: on aarch64 validate_boot
+# checks the target keyring against them (_validate_package_signing).
 awk -F'\t' '
   FILENAME == ARGV[1] { installable[$1] = 1; next }
   FILENAME == ARGV[2] { image[$1 "\t" $2] = 1; next }
-  !(($1 "\t" $2) in image) && ($3 in installable) { print $3 }
+  (!(($1 "\t" $2) in image) && ($3 in installable)) || $1 == "archlinuxarm-keyring" { print $3 }
 ' <(printf '%s\n' "$installable_files") <(image_package_index) <(mirror_package_index) | sort -u >"$shipped_list"
 # grep -c exits 1 on no match; the count check below wants the 0.
 shipped_count=$(grep -c . "$shipped_list" || true)
@@ -1059,8 +1059,8 @@ echo "[timing] mkarchiso end $(date +%s)"
 # 91 MiB one boots in 512 MB. 128 MiB leaves headroom over today's size and
 # none for that class of regression.
 live_initramfs_limit=$((128 * 1024 * 1024))
-for live_initramfs in "$build_cache_dir/work/iso/${iso_subdir%/*}/boot/x86_64"/initramfs-*.img; do
-  [[ -f $live_initramfs ]] || { echo "ERROR: no live initramfs under work/iso/${iso_subdir%/*}/boot/x86_64" >&2; exit 1; }
+for live_initramfs in "$build_cache_dir/work/iso/${iso_subdir%/*}/boot/$OMARCHY_ARCH"/initramfs-*.img; do
+  [[ -f $live_initramfs ]] || { echo "ERROR: no live initramfs under work/iso/${iso_subdir%/*}/boot/$OMARCHY_ARCH" >&2; exit 1; }
   live_initramfs_bytes=$(stat -c %s "$live_initramfs")
   echo "live initramfs $(basename "$live_initramfs"): $live_initramfs_bytes bytes"
   if (( live_initramfs_bytes > live_initramfs_limit )); then
