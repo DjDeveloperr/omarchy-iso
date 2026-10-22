@@ -28,7 +28,15 @@ curl -fsSLO "https://iso.omarchy.org/omarchy-$version.iso.sha256"
 sha256sum -c "omarchy-$version.iso.sha256"
 ```
 
-Use the `.sig` file to verify the ISO against the Omarchy signing key.
+The checksum only catches a corrupted download. The `.sig` file proves that Omarchy built the ISO. Fetch the Omarchy signing key by its full fingerprint, then verify the ISO with GnuPG:
+
+```bash
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
+curl -fsSLO "https://iso.omarchy.org/omarchy-$version.iso.sig"
+gpg --verify "omarchy-$version.iso.sig" "omarchy-$version.iso"
+```
+
+The output must say `Good signature from "Omarchy <pkgs@omarchy.org>"` and show the key `40DFB630FF42BCFFB047046CF0134EE680CAC571`. A warning that the key is not certified with a trusted signature is expected. It means only that you have not signed the key yourself.
 
 ### More in the manual
 
