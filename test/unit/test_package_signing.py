@@ -2,8 +2,9 @@
 
 The install runs offline with SigLevel = Never, so a target that never got
 archlinuxarm-keyring looked fine until its first online pacman run failed with
-"unknown trust". These tests keep the keyring in the early packages and keep
-validate_boot refusing a target keyring pacman would not accept.
+"unknown trust". These tests keep the installer populating the Arch Linux ARM keys
+into the target keyring and keep validate_boot refusing a target keyring
+pacman would not accept.
 """
 
 import os
@@ -27,18 +28,28 @@ from orchestrator import phases_impl  # noqa: E402
 PACKAGE = "archlinuxarm-keyring-20240419-2-any.pkg.tar.xz"
 
 
-class EarlyKeyringTest(unittest.TestCase):
-    def test_aarch64_installs_the_arch_linux_arm_keyring_early(self):
-        with mock.patch.object(phases_impl.platform, "machine", return_value="aarch64"):
-            packages = phases_impl._early_bootstrap_packages()
-        self.assertIn("archlinuxarm-keyring", packages)
-        # In the transaction that populates omarchy-keyring, before anything
-        # is installed from an Arch Linux ARM repository online.
-        self.assertLess(packages.index("archlinuxarm-keyring"), packages.index(phases_impl._omarchy_settings_package()))
+class TargetKeyringTest(unittest.TestCase):
+    # The root image ships no keyring; the installer populates the target's
+    # from the keyring packages the image holds, archlinuxarm-keyring among
+    # them on aarch64.
+    def script(self, machine):
+        ctx = mock.Mock()
+        ctx.target = Path("/mnt")
+        ctx.state = {}
+        with mock.patch.object(phases_impl.platform, "machine", return_value=machine), \
+                mock.patch.object(phases_impl.subprocess, "run"), \
+                mock.patch.object(phases_impl.subprocess, "Popen") as popen, \
+                mock.patch.object(phases_impl, "info", lambda _message: None):
+            phases_impl._start_target_keyring_init(ctx)
+        return popen.call_args.args[0][-1]
+
+    def test_aarch64_populates_the_arch_linux_arm_keys(self):
+        self.assertIn("--populate archlinux omarchy archlinuxarm", self.script("aarch64"))
 
     def test_x86_64_does_not(self):
-        with mock.patch.object(phases_impl.platform, "machine", return_value="x86_64"):
-            self.assertNotIn("archlinuxarm-keyring", phases_impl._early_bootstrap_packages())
+        script = self.script("x86_64")
+        self.assertIn("--populate archlinux omarchy", script)
+        self.assertNotIn("archlinuxarm", script)
 
 
 @unittest.skipUnless(shutil.which("gpg") and shutil.which("gpgconf"), "needs GnuPG")
@@ -72,7 +83,7 @@ class PackageSigningTest(unittest.TestCase):
         self.addCleanup(self.gpg_kill, self.gnupg)
         public_key = self.tmp / "builder.asc"
         self.gpg(self.builder, "--export", "--armor", "--output", str(public_key), self.fingerprint)
-        self.ctx = types.SimpleNamespace(target=self.target)
+        self.ctx = types.SimpleNamespace(target=self.target, state={})
 
     def gpg(self, home, *args, stdin=None):
         return subprocess.run(

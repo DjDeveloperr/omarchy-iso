@@ -166,13 +166,17 @@ def _time_step(label: str):
             info(f"[step] {label}: {_elapsed:.3f}s")
 
 
-ROOT_IMAGE_STREAM = Path("/run/archiso/bootmnt/arch/x86_64/omarchy-root.btrfs.zst")
+# The ISO keeps the root image beside the live system's files, in the directory
+# archiso names after the architecture, which is what platform.machine() says
+# on the live system: arch/x86_64 or arch/aarch64.
+ROOT_IMAGE_DIR = Path("/run/archiso/bootmnt/arch") / platform.machine()
+ROOT_IMAGE_STREAM = ROOT_IMAGE_DIR / "omarchy-root.btrfs.zst"
 # The btrfs filesystem image build-root-image.sh emits. When the ISO carries
 # it, the installer writes it onto the target partition and gives the
 # filesystem a new fsid; without it, the install falls back to the stream.
-ROOT_IMAGE_RAW = Path("/run/archiso/bootmnt/arch/x86_64/omarchy-root.img")
+ROOT_IMAGE_RAW = ROOT_IMAGE_DIR / "omarchy-root.img"
 # The same image, zstd-compressed: what the ISO ships.
-ROOT_IMAGE_RAW_ZST = Path("/run/archiso/bootmnt/arch/x86_64/omarchy-root.img.zst")
+ROOT_IMAGE_RAW_ZST = ROOT_IMAGE_DIR / "omarchy-root.img.zst"
 # Decompresses the outer layer in the receive pipe. --long=27 mirrors the
 # compressing side's window: it is within the decoder's default 128 MiB
 # acceptance limit, but saying it here keeps the pair visibly in step with
@@ -482,6 +486,14 @@ def arch_install_system(ctx: InstallContext) -> None:
             if missing_headers:
                 with _time_step(f"STEP.kernel_headers ({' '.join(missing_headers)})"):
                     installer.add_additional_packages(missing_headers)
+
+            # The image holds the plain default set. A board with a default set
+            # of its own (the N1x, the Snapdragon laptops) gets what that set
+            # adds, in this masked-hooks transaction like the rest of the delta.
+            platform_packages = _platform_delta_packages(installer.target)
+            if platform_packages:
+                with _time_step(f"STEP.platform_packages ({_base_package_file().name})"):
+                    installer.add_additional_packages(platform_packages)
 
             with _time_step("STEP.configure_keyboard"):
                 if not configure_keyboard(
@@ -826,7 +838,7 @@ def _start_target_keyring_init(ctx: InstallContext) -> None:
     keyrings = shlex.quote(str(ctx.target / "usr" / "share" / "pacman" / "keyrings"))
     script = (
         f"pacman-key --gpgdir {gpgdir} --init && "
-        f"pacman-key --gpgdir {gpgdir} --populate-from {keyrings} --populate archlinux omarchy"
+        f"pacman-key --gpgdir {gpgdir} --populate-from {keyrings} --populate {' '.join(_target_keyrings())}"
     )
     info("› initializing per-machine pacman keyring (background unit)")
     # A failed unit from an earlier attempt would hold the name (--collect
@@ -839,6 +851,16 @@ def _start_target_keyring_init(ctx: InstallContext) -> None:
         stderr=subprocess.STDOUT,
         text=True,
     )
+
+
+def _target_keyrings() -> list[str]:
+    """The keyrings the target's pacman must trust. Arch Linux ARM signs every
+    package in its repositories, archlinux-keyring included, with its own build
+    keys, which only archlinuxarm-keyring carries; the aarch64 image holds it."""
+    keyrings = ["archlinux", "omarchy"]
+    if platform.machine() == "aarch64":
+        keyrings.append("archlinuxarm")
+    return keyrings
 
 
 def _join_target_keyring_init(ctx: InstallContext, *, raise_on_error: bool = True) -> None:
@@ -2107,7 +2129,12 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     prebuilt_kernel = prebuilt_kernel_file.read_text().strip() if prebuilt_kernel_file.is_file() else "linux"
     esp_uki = ctx.target / "boot" / "EFI" / "Linux" / f"omarchy_{prebuilt_kernel}.efi"
     used_prebuilt_uki = False
-    if prebuilt_uki.is_file():
+    # A board with a platform of its own boots by its hardware scripts' rules
+    # (the N1x: the console on the panel in every entry, a fallback UKI as the
+    # rescue entry; validate_boot checks them), which limine-mkinitcpio applies
+    # and a UKI built in the image cannot know. Every other machine, a generic
+    # aarch64 one included, takes the image's UKI.
+    if prebuilt_uki.is_file() and not _arm_platform_boot():
         used_prebuilt_uki = True
         with _time_step("LIMINE.deploy_prebuilt_uki (copy from image)"):
             esp_uki.parent.mkdir(parents=True, exist_ok=True)
@@ -2589,6 +2616,10 @@ def _validate_package_signing(ctx: InstallContext, mirror: Path = OFFLINE_MIRROR
     if platform.machine() != "aarch64":
         return
 
+    # The keyring is populated by a unit that runs on through the install;
+    # read it finished. create_factory_snapshot's join is then a no-op.
+    _join_target_keyring_init(ctx)
+
     signatures = sorted(mirror.glob("archlinuxarm-keyring-*.pkg.tar.*.sig"))
     if not signatures:
         raise RuntimeError(f"no archlinuxarm-keyring signature in {mirror} to check the target keyring against")
@@ -2634,6 +2665,39 @@ def _limine_entries(limine_conf_text: str) -> list[tuple[str, dict[str, str]]]:
             key, value = stripped.split(":", 1)
             entries[-1][1][key.strip().lower()] = value.strip()
     return entries
+
+
+def _base_package_file(share: Path = Path("/usr/share/omarchy-iso")) -> Path:
+    """The default set for the platform this machine is, where the image
+    carries one; the plain list for every other machine."""
+    detected = hw_platform()
+    platform_list = share / f"omarchy-base.{detected}.packages"
+    if detected and platform_list.is_file():
+        return platform_list
+    return share / "omarchy-base.packages"
+
+
+def _platform_delta_packages(target: Path, share: Path = Path("/usr/share/omarchy-iso")) -> list[str]:
+    """What this machine's platform default set adds to the image, which is
+    built from the plain set: nothing on a machine without one."""
+    base_pkgs_file = _base_package_file(share)
+    if base_pkgs_file.name == "omarchy-base.packages":
+        return []
+    pkgs: list[str] = []
+    for raw in base_pkgs_file.read_text().splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#") or s in pkgs:
+            continue
+        if not arch.target_has_package(target, s):
+            pkgs.append(s)
+    return pkgs
+
+
+def _arm_platform_boot() -> bool:
+    """Whether this is an aarch64 board with a platform of its own, whose
+    boot entries its hardware scripts set up (hw_platform says "aarch64" on a
+    generic one)."""
+    return platform.machine() == "aarch64" and hw_platform() not in ("", "aarch64")
 
 
 def _installed_arm_platform(ctx: InstallContext) -> str:

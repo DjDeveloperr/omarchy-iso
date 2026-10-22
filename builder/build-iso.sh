@@ -734,10 +734,21 @@ rebuild_offline_repo_db
 # do not conflict, and Tailscale is idle without an auth key.
 # omarchy-apply-system still installs more from omarchy-other.packages as the
 # hardware dictates.
+# On aarch64 the image also holds what the x86_64 runtime pulls in by
+# dependency and the aarch64 one does not: the Limine/Snapper stack, which UEFI
+# aarch64 machines boot like x86_64 ones; and archlinuxarm-keyring, whose keys
+# sign every Arch Linux ARM package (the installer populates it with the rest).
+image_arch_packages=()
+if [[ $OMARCHY_ARCH == aarch64 ]]; then
+  image_arch_packages=(archlinuxarm-keyring limine-mkinitcpio-hook limine-snapper-sync snapper)
+fi
 mapfile -t image_packages < <(
   {
-    grep -hv '^#\|^$' /builder/archinstall.packages
+    # The architecture's list: on aarch64 the kernel is the image's and the
+    # x86_64-only packages are gone.
+    grep -hv '^#\|^$' "$archinstall_packages_file"
     grep -hv '^#\|^$' /builder/image.packages
+    ((${#image_arch_packages[@]} == 0)) || printf '%s\n' "${image_arch_packages[@]}"
     # The shipped copy, which is what the install reads too.
     grep -hv '^#\|^$' "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
     printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"
@@ -763,7 +774,7 @@ sed "/^\[options\]/a CacheDir = /var/cache/omarchy/mirror/offline/" \
 # profiledef.sh cannot be sourced standalone (its file_permissions needs
 # mkarchiso's declare -A first); read the two values it sets instead.
 iso_subdir="$(sed -n 's/^install_dir="\(.*\)"$/\1/p' "$build_cache_dir/profiledef.sh")/$(sed -n 's/^arch="\(.*\)"$/\1/p' "$build_cache_dir/profiledef.sh")"
-[[ $iso_subdir == */x86_64 ]] || { echo "ERROR: could not read install_dir/arch from profiledef.sh: '$iso_subdir'" >&2; exit 1; }
+[[ $iso_subdir == */"$OMARCHY_ARCH" ]] || { echo "ERROR: could not read install_dir/arch from profiledef.sh: '$iso_subdir'" >&2; exit 1; }
 root_image_dir="$build_cache_dir/work/iso/$iso_subdir"
 root_image_stream="$root_image_dir/omarchy-root.img.zst"
 mkdir -p "$root_image_dir"
@@ -842,9 +853,19 @@ echo "Shipping $shipped_count of $mirror_count mirror packages; the root image p
 # phases.py records expected and actual in the timing JSON, so drift shows up
 # in acceptance runs.
 resolve_expected_packages() {
-  local base_list=$1
+  # $1, if given: a platform's own default set, whose packages the installer
+  # adds to the image's plain set on that platform.
+  local base_list=${1:-}
   local resolve_root=/tmp/omarchy-expected-packages
-  local image_count resolved
+  local image_count resolved kernel=linux
+  local -a targets
+  [[ $OMARCHY_ARCH == aarch64 ]] && kernel=$OMARCHY_KERNEL
+  targets=("$kernel")
+  if [[ -n $base_list ]]; then
+    mapfile -t -O 1 targets < <(
+      grep -hv '^#\|^$' "$base_list" | grep -Fxv -f <(printf '%s\n' "${image_packages[@]}") || true
+    )
+  fi
 
   rm -rf "$resolve_root"
   mkdir -p "$resolve_root/var/lib/pacman"
@@ -861,7 +882,7 @@ resolve_expected_packages() {
   # pacman names the unsatisfied dependency on stdout, so show it on failure.
   if ! resolved="$(pacman --config "$build_cache_dir/pacman-offline.conf" \
     --root "$resolve_root" --dbpath "$resolve_root/var/lib/pacman" \
-    --noconfirm -S --print --print-format '%n' --needed linux)"; then
+    --noconfirm -S --print --print-format '%n' --needed "${targets[@]}")"; then
     printf '%s\n' "$resolved" >&2
     return 1
   fi
@@ -891,6 +912,21 @@ fi
 printf '%s\n' "$expected_packages" \
   >"$build_cache_dir/airootfs/usr/share/omarchy-iso/expected-packages"
 echo "Target install resolves to $expected_packages packages."
+
+# One count for each platform's own default set (aarch64 boards), which the
+# dashboard picks on that platform (phases._expected_package_count).
+for platform_list in "$build_cache_dir"/airootfs/usr/share/omarchy-iso/omarchy-base.*.packages; do
+  [[ -f $platform_list ]] || continue
+  platform=${platform_list##*/omarchy-base.}
+  platform=${platform%.packages}
+  if ! expected_packages="$(resolve_expected_packages "$platform_list")"; then
+    echo "ERROR: could not resolve the target package count for $platform from the offline mirror." >&2
+    exit 1
+  fi
+  printf '%s\n' "$expected_packages" \
+    >"$build_cache_dir/airootfs/usr/share/omarchy-iso/expected-packages.$platform"
+  echo "Target install on $platform resolves to $expected_packages packages."
+done
 
 # Live ISO uses the same offline pacman.conf.
 cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.conf"
