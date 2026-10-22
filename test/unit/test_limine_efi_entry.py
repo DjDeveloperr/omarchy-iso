@@ -364,9 +364,9 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
         with mock.patch.object(phases_impl, "error", lambda _message: None):
             with self.assertRaises(RuntimeError):
-                phases_impl._validate_uefi_boot_routes(esp)
+                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
             self.nvram_with({"0004": self.entry("Limine", OTHER), "0005": self.entry("Limine", OURS, part=3)}, ["0005", "0004"])
-            phases_impl._validate_uefi_boot_routes(esp)
+            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
 
 
 if __name__ == "__main__":

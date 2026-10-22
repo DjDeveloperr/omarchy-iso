@@ -2931,7 +2931,14 @@ def validate_boot(ctx: InstallContext) -> None:
             if not any(uki.exists() and uki.stat().st_size for uki in ukis):
                 raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
 
-        _validate_uefi_boot_routes(esp_mount)
+        # A full-disk install formatted this ESP, so whatever is on its
+        # removable path is this install's. A protected target's ESP may be
+        # another OS's too, and its removable loader that OS's, unless this
+        # install claimed the path (enable_fallback, see _boot_intent).
+        _validate_uefi_boot_routes(
+            esp_mount,
+            fallback_is_ours=not ctx.is_protected or bool(boot.get("enable_fallback")),
+        )
 
     if ctx.is_protected:
         _validate_pre_mounted_filesystems(ctx)
@@ -3127,7 +3134,7 @@ def _validate_linux_boot_entry(esp_mount: Path, config_text: str, encrypted: boo
     raise RuntimeError(f"{esp_mount / 'limine.conf'} has no bootable Omarchy Linux entry with a kernel and initramfs")
 
 
-def _validate_uefi_boot_routes(esp_mount: Path) -> None:
+def _validate_uefi_boot_routes(esp_mount: Path, *, fallback_is_ours: bool) -> None:
     """Check the two ways firmware can reach this install, and insist on one.
 
     The named "Limine" boot variable is the route we prefer and the one
@@ -3141,9 +3148,14 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     way back. Firmware that takes the variable at registration and discards
     it before the install ends is the case worth naming, because nothing
     else in the install notices.
+
+    The removable path counts only when `fallback_is_ours`: on an ESP this
+    install shares and did not claim the path on, the file there is another
+    OS's loader and starts that OS.
     """
     fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
-    has_fallback = fallback_binary.exists() and fallback_binary.stat().st_size > 0
+    fallback_present = fallback_binary.exists() and fallback_binary.stat().st_size > 0
+    has_fallback = fallback_is_ours and fallback_present
     # Only an entry naming this ESP counts: next to another Omarchy, its
     # "Limine" entry says nothing about whether ours survived. If the ESP's
     # GUID cannot be read, any "Limine" entry does.
@@ -3155,9 +3167,10 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     )
 
     if not has_entry and not has_fallback:
+        fallback_state = "is not written by this install" if fallback_present else "is missing or empty"
         raise RuntimeError(
             "no bootable route to this install: efibootmgr has no 'Limine' entry "
-            f"and {fallback_binary} is missing or empty"
+            f"and {fallback_binary} {fallback_state}"
         )
 
     if not has_entry:
@@ -3172,7 +3185,14 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
         )
         return
 
-    if not has_fallback:
+    if not has_fallback and fallback_present:
+        error(
+            f"Warning: {fallback_binary} belongs to another system on this shared EFI "
+            "partition and was left alone, so this install depends on the 'Limine' "
+            "UEFI boot entry alone. It boots now. If firmware later clears NVRAM, "
+            "re-add the entry with efibootmgr from a live session."
+        )
+    elif not has_fallback:
         error(
             f"Warning: {fallback_binary} was not deployed, so this install depends "
             "on the 'Limine' UEFI boot entry alone. It boots now. If firmware "
