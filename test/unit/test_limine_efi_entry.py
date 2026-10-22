@@ -2,7 +2,8 @@
 
 The fake keeps NVRAM in a JSON file and behaves like efibootmgr 18: a listing
 prints each entry's device path after its label, --create takes the lowest free
-number and puts it first in BootOrder, --delete-bootnum frees the number again.
+number and puts it first in BootOrder, --delete-bootnum frees the number again,
+--bootnext refuses a number that has no entry.
 A fake lsblk answers the ESP's partition GUID.
 
 The case that matters: a free-space install next to an existing Omarchy must
@@ -39,6 +40,8 @@ path = os.environ["FAKE_NVRAM"]
 nvram = json.load(open(path))
 args = sys.argv[1:]
 if not args:
+    if "next" in nvram:
+        print("BootNext: " + nvram["next"])
     print("BootCurrent: 0001")
     print("BootOrder: " + ",".join(nvram["order"]))
     for num, (label, dp) in sorted(nvram["entries"].items()):
@@ -57,6 +60,12 @@ elif "--delete-bootnum" in args:
     nvram["order"] = [n for n in nvram["order"] if n != num]
 elif "--bootorder" in args:
     nvram["order"] = args[args.index("--bootorder") + 1].split(",")
+elif "--bootnext" in args:
+    num = args[args.index("--bootnext") + 1]
+    if os.environ.get("FAKE_REFUSE_BOOTNEXT") or num not in nvram["entries"]:
+        print("Could not set BootNext: Invalid argument", file=sys.stderr)
+        sys.exit(5)
+    nvram["next"] = num
 json.dump(nvram, open(path, "w"))
 '''
 
@@ -153,6 +162,26 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertEqual(nvram["order"][0], "0001")
         self.assertIn(OURS, nvram["entries"]["0001"][1])
         self.assertEqual(nvram["order"], ["0001", "0000"])
+
+    def test_the_next_boot_is_ours_whatever_the_firmware_does_to_bootorder(self):
+        # An MSI MAG Z690 Tomahawk rewrites BootOrder at the next POST and
+        # puts a new entry behind its own, here the other install's "Limine".
+        # BootNext is read before BootOrder.
+        self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
+        nvram = self.register()
+        ours = next(num for num, (_, dp) in nvram["entries"].items() if OURS in dp)
+        self.assertEqual(nvram.get("next"), ours, nvram)
+
+    def test_a_refused_bootnext_keeps_the_bootorder_route(self):
+        self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
+        errors = []
+        with mock.patch.dict(os.environ, {"FAKE_REFUSE_BOOTNEXT": "1"}):
+            with mock.patch.object(phases_impl, "error", errors.append):
+                nvram = self.register()
+        ours = next(num for num, (_, dp) in nvram["entries"].items() if OURS in dp)
+        self.assertNotIn("next", nvram)
+        self.assertEqual(nvram["order"], [ours, "0004"])
+        self.assertTrue(any("BootNext" in message for message in errors), errors)
 
     def test_created_entry_reusing_a_deleted_number_is_found(self):
         self.nvram_with({"0000": self.entry("Limine", OURS, part=3)}, ["0000"])
