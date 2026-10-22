@@ -41,7 +41,7 @@ grep -Fq 'echo "$OMARCHY_KERNEL" > "$build_cache_dir/airootfs/root/omarchy_kerne
 
 # --- builder wiring -----------------------------------------------------------
 grep -Fq 'online_pacman_conf="/configs/pacman-online-aarch64-${OMARCHY_MIRROR}.conf"' "$ROOT/builder/build-iso.sh" || fail "aarch64 does not use its own online pacman config for the channel"
-if grep -Fq 'pacman-online-${OMARCHY_MIRROR}.conf --noconfirm' "$ROOT/builder/build-iso.sh"; then
+if grep -Fq -- '--config "/configs/pacman-online-' "$ROOT/builder/build-iso.sh"; then
   fail "a pacman call still hardcodes the x86 mirror config"
 fi
 grep -Fq 'configure_archiso_aarch64_mkinitcpio' "$ROOT/builder/build-iso.sh" || fail "live initramfs is not adapted for aarch64"
@@ -135,6 +135,38 @@ grep -Fq 'archlinuxarm-keyring limine limine-mkinitcpio-hook limine-snapper-sync
   || fail "the offline mirror lacks the Limine/Snapper stack the installer adds"
 grep -Fq '"${base_pkg_lists[@]}" "${platform_lists[@]}"' "$ROOT/builder/build-iso.sh" \
   || fail "the offline mirror does not carry every platform's own packages"
+# What the ISO ships is looked up in the same repositories the mirror was
+# downloaded from: on aarch64 that is the bundle and Arch Linux ARM, which the
+# x86_64 config does not name. The builder's own lookup, run against the
+# aarch64 config's repositories synced, one package in the bundle and one in
+# Arch Linux ARM's own repository.
+sync_db() { # repository, and the package it holds, if any
+  mkdir -p "$fixture/offlinedb/sync" "$fixture/repo-$1"
+  if [[ -n ${2:-} ]]; then
+    mkdir -p "$fixture/repo-$1/$2-1.0-1"
+    printf '%%FILENAME%%\n%s-1.0-1-aarch64.pkg.tar.zst\n\n%%NAME%%\n%s\n\n%%VERSION%%\n1.0-1\n\n%%ARCH%%\naarch64\n\n' "$2" "$2" \
+      >"$fixture/repo-$1/$2-1.0-1/desc"
+  fi
+  ls "$fixture/repo-$1" | bsdtar -czf "$fixture/offlinedb/sync/$1.db" -C "$fixture/repo-$1" -T -
+}
+for repo in $(sed -n 's/^\[\(.*\)\]$/\1/p' "$ROOT/configs/pacman-online-aarch64-edge.conf" | grep -vx options); do
+  sync_db "$repo"
+done
+sync_db platform bundle-only
+sync_db alarm alarm-only
+lookup=$(sed -n '/^if ! installable_files="\$($/,/^fi$/p' "$ROOT/builder/build-iso.sh")
+[[ -n $lookup ]] || fail "the builder no longer looks up what an install can ask for"
+lookup=${lookup//\/tmp\/offlinedb/$fixture/offlinedb}
+lookup=${lookup//\/configs\//$ROOT/configs/}
+installable=$(
+  OMARCHY_ARCH=aarch64 OMARCHY_MIRROR=edge
+  online_pacman_conf=$ROOT/configs/pacman-online-aarch64-edge.conf
+  target_packages=(bundle-only alarm-only)
+  eval "$lookup" 2>/dev/null
+  printf '%s\n' "$installable_files" | sort | paste -sd' '
+) || true
+[[ $installable == 'alarm-only-1.0-1-aarch64.pkg.tar.zst bundle-only-1.0-1-aarch64.pkg.tar.zst' ]] \
+  || fail "an aarch64 build looks up what it ships in other repositories than it downloaded from: '$installable'"
 
 # --- one image for every board ------------------------------------------------
 # linux-omarchy and nothing else, and nothing that asks which board the image

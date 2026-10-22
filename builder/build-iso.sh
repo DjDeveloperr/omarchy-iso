@@ -906,7 +906,7 @@ image_package_index() {
 # tooling (about 180 packages, 125 MB), downloaded because
 # the live root is pacstrapped from this mirror and then left in it.
 if ! installable_files="$(
-  pacman --config "/configs/pacman-online-${OMARCHY_MIRROR}.conf" --noconfirm \
+  pacman --config "$online_pacman_conf" --noconfirm \
     --dbpath /tmp/offlinedb -S --print --print-format '%f' "${target_packages[@]}"
 )"; then
   echo "ERROR: could not resolve the packages an install can ask for" >&2
