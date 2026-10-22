@@ -28,7 +28,20 @@
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 base_image_ready || { echo "No base image; run this through ./test/integration" >&2; exit 1; }
 
-# The UKI's embedded initramfs, listed the way the firmware would see it.
+# The initramfs the LUKS prompt runs from, as a guest shell snippet that sets
+# $img. A UEFI install boots a UKI with the initramfs embedded. A BIOS install
+# sets ENABLE_UKI=no: Limine loads a kernel and an initramfs file, the one
+# the Omarchy entry in /boot/limine.conf names (boot():/<path>#<hash>); its
+# snapshot entries under limine_history come after it.
+boot_initramfs() {
+  if [[ $FIRMWARE == bios ]]; then
+    echo 'img=$(sed -n "s|^[[:space:]]*module_path:[[:space:]]*boot():/\([^#[:space:]]*initramfs[^#[:space:]]*\).*|/boot/\1|p" /boot/limine.conf 2>/dev/null | grep -v /limine_history/ | head -1)'
+  else
+    echo 'img=$(ls /boot/EFI/Linux/*.efi /efi/EFI/Linux/*.efi 2>/dev/null | head -1)'
+  fi
+}
+
+# That initramfs, listed the way the firmware would see it.
 #
 # lsinitcpio, not objcopy | cpio. An initramfs is an uncompressed early cpio
 # (microcode) concatenated with the compressed main image, and plain cpio stops
@@ -37,10 +50,10 @@ base_image_ready || { echo "No base image; run this through ./test/integration" 
 # has none. It reads the pre-built UKI in full only because that one is
 # uncompressed throughout. lsinitcpio understands both segments and the
 # compression, and mkinitcpio ships it, so the guest always has it.
-uki_initramfs_manifest() {
-  ssh_sudo 'uki=$(ls /boot/EFI/Linux/*.efi /efi/EFI/Linux/*.efi 2>/dev/null | head -1); \
-    [ -n "$uki" ] || exit 1; \
-    lsinitcpio -l "$uki" 2>/dev/null | grep -E "keymap\.bin|share/kbd/keymaps/.*\.map|etc/vconsole\.conf"'
+boot_initramfs_manifest() {
+  ssh_sudo "$(boot_initramfs)"'; \
+    [ -n "$img" ] || exit 1; \
+    lsinitcpio -l "$img" 2>/dev/null | grep -E "keymap\.bin|share/kbd/keymaps/.*\.map|etc/vconsole\.conf"'
 }
 
 # The KEYMAP= the initramfs's own bundled vconsole.conf names.
@@ -60,19 +73,19 @@ uki_initramfs_manifest() {
 # lsinitcpio -x extracts to the current directory and has no -d; --cpio limits
 # it to the main image, skipping the microcode early cpio.
 initramfs_bundled_keymap() {
-  ssh_sudo 'uki=$(ls /boot/EFI/Linux/*.efi /efi/EFI/Linux/*.efi 2>/dev/null | head -1); \
-    [ -n "$uki" ] || exit 1; \
+  ssh_sudo "$(boot_initramfs)"'; \
+    [ -n "$img" ] || exit 1; \
     d=$(mktemp -d); trap "rm -rf $d" EXIT; \
-    ( cd "$d" && lsinitcpio -x --cpio "$uki" ) >/dev/null 2>&1 || exit 1; \
+    ( cd "$d" && lsinitcpio -x --cpio "$img" ) >/dev/null 2>&1 || exit 1; \
     . "$d/etc/vconsole.conf" 2>/dev/null; printf "%s" "${KEYMAP:-}"'
 }
 
 # A manifest that lists no /init is a truncated read, not a broken initramfs.
 # Without this an extraction bug reads as a clean pass on the locale half and a
 # confident (wrong) failure on the keymap half.
-uki_manifest_is_complete() {
-  ssh_sudo 'uki=$(ls /boot/EFI/Linux/*.efi /efi/EFI/Linux/*.efi 2>/dev/null | head -1); \
-    [ -n "$uki" ] && lsinitcpio -l "$uki" 2>/dev/null | grep -qx "init"'
+boot_initramfs_is_complete() {
+  ssh_sudo "$(boot_initramfs)"'; \
+    [ -n "$img" ] && lsinitcpio -l "$img" 2>/dev/null | grep -qx "init"'
 }
 
 verify_keymap_and_locale() {
@@ -103,12 +116,12 @@ verify_keymap_and_locale() {
 
   # --- the initramfs the LUKS prompt runs from ------------------------------
   local manifest
-  manifest=$(uki_initramfs_manifest) || manifest=""
-  log "UKI initramfs keymap payload: ${manifest//$'\n'/ }"
+  manifest=$(boot_initramfs_manifest) || manifest=""
+  log "Boot initramfs keymap payload ($FIRMWARE): ${manifest//$'\n'/ }"
 
   # Before trusting anything read out of the initramfs, prove the read itself
   # reached the main image.
-  check "the UKI's initramfs reads completely (contains /init)" uki_manifest_is_complete
+  check "the boot initramfs reads completely (contains /init)" boot_initramfs_is_complete
 
   if [[ $KB_LAYOUT == us ]]; then
     # Not a pass: with the default layout this scenario cannot tell a kept
@@ -123,8 +136,8 @@ verify_keymap_and_locale() {
     manifest_has_a_keymap() {
       grep -qE "keymap\.bin|/${KB_LAYOUT}\.map" <<<"$manifest"
     }
-    check "the UKI initramfs carries a compiled keymap" manifest_has_a_keymap
-    check "the UKI initramfs's bundled vconsole.conf names $KB_LAYOUT, so the LUKS prompt uses it" \
+    check "the boot initramfs carries a compiled keymap" manifest_has_a_keymap
+    check "the boot initramfs's bundled vconsole.conf names $KB_LAYOUT, so the LUKS prompt uses it" \
       test "$(initramfs_bundled_keymap)" = "$KB_LAYOUT"
   fi
 
