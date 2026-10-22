@@ -1237,32 +1237,26 @@ def _register_limine_efi_entry(
         for num, text in pre_state["entries"].items()
         if _is_limine_entry_for(text, esp, loader)
     ]
-    # Only a number whose delete succeeded can come back as the new entry. One
-    # whose delete failed still holds the old entry, and stays in BootOrder.
-    deleted = [
-        num
-        for num in stale_limine
-        if subprocess.run(
+
+    def delete(num: str) -> bool:
+        return subprocess.run(
             ["efibootmgr", "--bootnum", num, "--delete-bootnum"],
             check=False, capture_output=True,
         ).returncode == 0
-    ]
 
-    created = subprocess.run(
-        [
-            "efibootmgr",
-            "--create",
-            "--disk", str(disk),
-            "--part", str(part),
-            "--label", "Limine",
-            "--loader", loader,
-            "--unicode",
-            "--verbose",
-        ],
-        check=False,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    # The old entry goes only once its replacement exists. It may be this
+    # ESP's only boot route: a protected target can have no removable loader,
+    # so firmware that takes the delete and refuses the create would leave
+    # the machine with nothing to start it.
+    created = _create_limine_efi_entry(disk, part, loader)
+    # Except when NVRAM has no room for both. The old entry's slot is then
+    # the only way to a new one, so one identical entry makes way and the
+    # create is tried once more.
+    freed: list[str] = []
+    if created.returncode != 0 and "no space left on device" in (created.stderr or "").lower():
+        freed = next(([num] for num in stale_limine if delete(num)), [])
+        if freed:
+            created = _create_limine_efi_entry(disk, part, loader)
     detail = (created.stderr or "").strip()
     if created.returncode != 0:
         # Attach the reason to the failure. efibootmgr's stderr did reach the
@@ -1270,22 +1264,30 @@ def _register_limine_efi_entry(
         # CalledProcessError carries only argv and the exit status, so the
         # traceback people paste into a report says nothing about why.
         reason = f"efibootmgr --create exited {created.returncode}"
+        if freed:
+            reason += f" after the old entry Boot{freed[0]} was deleted to make room"
         _warn_boot_entry_refused(f"{reason}: {detail}" if detail else reason)
         return
     if detail:
         error(f"efibootmgr: {detail}")
 
+    if freed:
+        info(f"› NVRAM was full: replaced the old 'Limine' entry Boot{freed[0]} in place")
+
     # The entry just created: a "Limine" entry that was not there before, or
-    # that reuses the number of one deleted above. The first "Limine" entry in
-    # the list may be another install's, so one that starts this loader on
-    # this ESP comes first; a listing without device paths keeps list order.
+    # that reuses the number freed for it above. Firmware that keeps one
+    # option per device path can instead answer the create with the identical
+    # entry it already has, which is the new one then, so those come last.
+    # The first "Limine" entry in the list may be another install's, so one
+    # that starts this loader on this ESP comes first; a listing without
+    # device paths keeps list order.
     post_state = _read_efibootmgr()
     new_limine = sorted(
-        (
+        [
             num
             for num in _find_label_entries(post_state["entries"], "Limine")
-            if num not in pre_state["entries"] or num in deleted
-        ),
+            if num not in pre_state["entries"] or num in freed
+        ] + [num for num in stale_limine if num in post_state["entries"] and num not in freed],
         key=lambda num: not _is_limine_entry_for(post_state["entries"][num], esp, loader),
     )
     if not new_limine:
@@ -1295,6 +1297,10 @@ def _register_limine_efi_entry(
         )
         return
     limine_num = new_limine[0]
+
+    # Only now the old identical entries go, never the one just picked. One
+    # whose delete fails still holds the old entry, and stays in BootOrder.
+    deleted = freed + [num for num in stale_limine if num not in freed and num != limine_num and delete(num)]
 
     keep = [
         num
@@ -1336,6 +1342,24 @@ def _register_limine_efi_entry(
             "If the first reboot starts another system, pick Omarchy from the firmware "
             "boot menu (F11, F12 or Esc on most boards)."
         )
+
+
+def _create_limine_efi_entry(disk: Path, part: int, loader: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "efibootmgr",
+            "--create",
+            "--disk", str(disk),
+            "--part", str(part),
+            "--label", "Limine",
+            "--loader", loader,
+            "--unicode",
+            "--verbose",
+        ],
+        check=False,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 def _warn_boot_entry_refused(reason: str) -> None:
