@@ -1224,18 +1224,18 @@ def _register_limine_efi_entry(
     pre_state: dict | None = None,
 ) -> None:
     pre_state = pre_state or _read_efibootmgr()
-    # Replace only this ESP's own entry. Other "Limine" entries belong to other
-    # installs, such as the Omarchy a free-space install is put next to;
-    # deleting every "Limine" entry would leave those installs with none.
-    # efibootmgr prints each entry's device path, HD(part,GPT,<guid>,...), so
-    # this ESP's entries are the ones naming its partition GUID. An efibootmgr
-    # that prints no paths matches nothing, and a reinstall onto the same ESP
-    # then leaves one duplicate behind, which is harmless.
+    # Replace only an entry identical to the one created below. Other "Limine"
+    # entries belong to other installs, such as the Omarchy a free-space
+    # install is put next to; deleting every "Limine" entry would leave those
+    # installs with none. A second loader on this same ESP, such as
+    # \EFI\backup\limine.efi, is a separate boot option and stays too.
+    # An efibootmgr that prints no paths matches nothing, and a reinstall onto
+    # the same ESP then leaves one duplicate behind, which is harmless.
     esp = _partition_guid(disk, part)
     stale_limine = [
         num
-        for num in _find_label_entries(pre_state["entries"], "Limine")
-        if esp and esp in pre_state["entries"][num].lower()
+        for num, text in pre_state["entries"].items()
+        if _is_limine_entry_for(text, esp, loader)
     ]
     for num in stale_limine:
         subprocess.run(
@@ -1807,6 +1807,21 @@ def _read_efibootmgr() -> dict:
 
 def _find_label_entries(entries: dict[str, str], needle: str) -> list[str]:
     return [num for num, label in entries.items() if needle.lower() in label.lower()]
+
+
+def _is_limine_entry_for(entry: str, guid: str, loader: str) -> bool:
+    """Whether a `efibootmgr --verbose` entry is the one
+    _register_limine_efi_entry creates: labelled "Limine", starting `loader`
+    from the partition with GPT GUID `guid`. The listing reads
+    "Limine<TAB>HD(part,GPT,<guid>,...)/\\EFI\\...", or ".../File(\\EFI\\...)"
+    with an older efivar; FAT is case-insensitive, and so is this."""
+    label, _, path = entry.lower().partition("\t")
+    loader = loader.lower()
+    return (
+        label.strip() == "limine"
+        and bool(guid) and guid in path
+        and (f")/{loader}" in path or f"file({loader})" in path)
+    )
 
 
 def _partition_guid(disk: Path, part: int) -> str:

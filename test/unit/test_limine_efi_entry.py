@@ -210,6 +210,28 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertIn("0003", nvram["entries"])
         self.assertEqual(nvram["order"][0], "0000")
 
+    def test_other_loaders_on_this_esp_survive(self):
+        # Only an entry identical to the one created is replaced: same label,
+        # this ESP and this loader. A backup loader on the same ESP, or an
+        # entry someone labelled differently, is not ours to delete. The old
+        # entry still counts when the listing prints its path in upper case,
+        # and a BootOrder number with no entry behind it is dropped.
+        backup = self.entry("Limine", OURS, part=3, loader="\\EFI\\backup\\limine.efi")
+        relabelled = self.entry("Limine backup", OURS, part=3)
+        self.nvram_with(
+            {
+                "0003": [label.upper() for label in self.entry("Limine", OURS, part=3)],
+                "0005": backup,
+                "0006": relabelled,
+            },
+            ["0003", "0005", "0006", "FFFF"],
+        )
+        nvram = self.register()
+        self.assertNotIn("0003", nvram["entries"])
+        self.assertEqual(nvram["entries"]["0005"], backup)
+        self.assertEqual(nvram["entries"]["0006"], relabelled)
+        self.assertEqual(nvram["order"], ["0000", "0005", "0006"])
+
     def test_a_refused_create_leaves_other_installs_alone(self):
         self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
         warnings = []
