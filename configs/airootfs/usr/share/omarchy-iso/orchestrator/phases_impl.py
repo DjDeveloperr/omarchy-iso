@@ -23,11 +23,13 @@ Phase ordering (full-disk and protected/pre-mounted):
     configure_ssh_access   → authorized_keys for autoinstall; no-op otherwise
     configure_tailscale    → tailnet join staged for first boot; no-op otherwise
     validate_boot          → assert UKI / limine.conf / kernel cmdline are sane,
-                             and that at least one UEFI boot route exists
+                             that at least one UEFI boot route exists, and
+                             that the target keyring trusts its packages
     create_factory_snapshot→ joins the keyring unit, then snapshots @ as @factory
 """
 
 from __future__ import annotations
+import platform
 
 import fcntl
 import hashlib
@@ -45,7 +47,7 @@ from pathlib import Path
 
 from . import archinstall_adapter as arch
 from .command import capture, capture_identifier, require_text
-from .context import InstallContext
+from .context import InstallContext, hw_platform, iso_kernel
 from .keyboard import configure_keyboard
 from .phases import write_state
 from .ui import error, info
@@ -164,7 +166,10 @@ def _time_step(label: str):
 # table and written onto the target partition in place of pacstrapping it.
 # build-iso.sh ships it as a plain file on the ISO, read straight off the boot
 # medium, with its sha256 next to it. Its one subvolume becomes @.
-ROOT_IMAGE = Path("/run/archiso/bootmnt/arch/x86_64/omarchy-root.img.zst")
+# archiso names the directory after the architecture, which is what
+# platform.machine() says on the live system: arch/x86_64 or arch/aarch64.
+ROOT_IMAGE_DIR = Path("/run/archiso/bootmnt/arch") / platform.machine()
+ROOT_IMAGE = ROOT_IMAGE_DIR / "omarchy-root.img.zst"
 ROOT_IMAGE_SUBVOLUME = "omarchy-root"
 # Writes ROOT_IMAGE in parallel; compiled and installed by build-iso.sh.
 IMAGE_WRITE = Path("/usr/local/bin/omarchy-image-write")
@@ -236,7 +241,29 @@ def _root_image_required_packages() -> list[str]:
 # imports it, so no patching happens here.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Stage vendor-signed Qualcomm firmware before the Windows partition is removed.
+LIVE_FIRMWARE_STAGE = Path("/run/omarchy/firmware")
+TARGET_FIRMWARE_STAGE = Path("var/lib/omarchy/firmware-stage")
+
+
+def _stage_qualcomm_firmware() -> None:
+    tool = shutil.which("qcom-firmware-extract")
+    if not tool:
+        return
+    info("› saving Qualcomm firmware from Windows before the disk is written")
+    # Firmware extraction is idempotent and optional.
+    subprocess.run([tool, "--stage", str(LIVE_FIRMWARE_STAGE)], check=False)
+
+
+def _copy_firmware_stage_into_target(ctx: InstallContext) -> None:
+    if not (LIVE_FIRMWARE_STAGE / "manifest").is_file():
+        return
+    dst = ctx.target / TARGET_FIRMWARE_STAGE
+    shutil.copytree(LIVE_FIRMWARE_STAGE, dst, dirs_exist_ok=True)
+
+
 def prepare_live(ctx: InstallContext) -> None:
+    _stage_qualcomm_firmware()
     if ctx.is_protected:
         info("› protected mode: skipping whole-disk cleanup")
     else:
@@ -524,6 +551,14 @@ def arch_install_system(ctx: InstallContext) -> None:
             if missing_headers:
                 with _time_step(f"STEP.kernel_headers ({' '.join(missing_headers)})"):
                     installer.add_additional_packages(missing_headers)
+
+            # The image holds the plain default set. A board with a default set
+            # of its own (the N1x, the Snapdragon laptops) gets what that set
+            # adds, in this masked-hooks transaction like the rest of the delta.
+            platform_packages = _platform_delta_packages(installer.target)
+            if platform_packages:
+                with _time_step(f"STEP.platform_packages ({_base_package_file().name})"):
+                    installer.add_additional_packages(platform_packages)
 
             with _time_step("STEP.configure_keyboard"):
                 if not configure_keyboard(
@@ -895,7 +930,7 @@ def _start_target_keyring_init(ctx: InstallContext) -> None:
     keyrings = shlex.quote(str(ctx.target / "usr" / "share" / "pacman" / "keyrings"))
     script = (
         f"pacman-key --gpgdir {gpgdir} --init && "
-        f"pacman-key --gpgdir {gpgdir} --populate-from {keyrings} --populate archlinux omarchy"
+        f"pacman-key --gpgdir {gpgdir} --populate-from {keyrings} --populate {' '.join(_target_keyrings())}"
     )
     info("› initializing per-machine pacman keyring (background unit)")
     # A failed unit from an earlier attempt would hold the name (--collect
@@ -908,6 +943,16 @@ def _start_target_keyring_init(ctx: InstallContext) -> None:
         stderr=subprocess.STDOUT,
         text=True,
     )
+
+
+def _target_keyrings() -> list[str]:
+    """The keyrings the target's pacman must trust. Arch Linux ARM signs every
+    package in its repositories, archlinux-keyring included, with its own build
+    keys, which only archlinuxarm-keyring carries; the aarch64 image holds it."""
+    keyrings = ["archlinux", "omarchy"]
+    if platform.machine() == "aarch64":
+        keyrings.append("archlinuxarm")
+    return keyrings
 
 
 def _join_target_keyring_init(ctx: InstallContext, *, raise_on_error: bool = True) -> None:
@@ -1029,7 +1074,7 @@ def _install_pre_mounted_limine(ctx: InstallContext) -> None:
         disk=Path(disk),
         part=part,
         esp_path=boot.get("esp_path", "/EFI/limine"),
-        efi_binary=boot.get("efi_binary", "limine_x64.efi"),
+        efi_binary=boot.get("efi_binary", _default_limine_efi_binary()),
         pre_state=pre_state,
     )
 
@@ -1037,6 +1082,16 @@ def _install_pre_mounted_limine(ctx: InstallContext) -> None:
     windows_after = _find_label_entries(post_state["entries"], "Windows")
     if windows_before and not windows_after:
         raise RuntimeError("Windows boot entry disappeared during Limine install — aborting")
+
+
+# UEFI binary names follow the machine architecture. The live ISO and the
+# target share one architecture, so the running kernel is authoritative.
+def _efi_arch_suffix() -> str:
+    return "AA64" if platform.machine() == "aarch64" else "X64"
+
+
+def _default_limine_efi_binary() -> str:
+    return f"limine_{_efi_arch_suffix().lower()}.efi"
 
 
 def _install_limine_efi(
@@ -1047,15 +1102,17 @@ def _install_limine_efi(
     part: int,
     removable: bool = False,
     esp_path: str = "/EFI/limine",
-    efi_binary: str = "limine_x64.efi",
+    efi_binary: str | None = None,
     pre_state: dict | None = None,
 ) -> None:
+    if efi_binary is None:
+        efi_binary = _default_limine_efi_binary()
     if removable:
         esp_path = "/EFI/BOOT"
-        efi_binary = "BOOTX64.EFI"
+        efi_binary = f"BOOT{_efi_arch_suffix()}.EFI"
 
     limine_path = ctx.target / "usr" / "share" / "limine"
-    source_name = "BOOTX64.EFI"
+    source_name = f"BOOT{_efi_arch_suffix()}.EFI"
     target_dir = Path(esp_mount) / esp_path.lstrip("/")
     target_path = target_dir / efi_binary
     _copy_required(limine_path / source_name, ctx.target / target_path.relative_to("/"))
@@ -1259,6 +1316,9 @@ def _write_limine_defaults_from_config(ctx: InstallContext, installer, config) -
     _write_limine_defaults(ctx, cmdline, esp_mount=_installer_esp_mount(installer))
 
 
+AARCH64_CONSOLE_CONF = "00-omarchy-console.conf"
+
+
 def _write_limine_defaults(
     ctx: InstallContext,
     cmdline: str,
@@ -1303,6 +1363,18 @@ def _write_limine_defaults(
     kernel_cmdline = ctx.target / "etc" / "kernel" / "cmdline"
     kernel_cmdline.parent.mkdir(parents=True, exist_ok=True)
     kernel_cmdline.write_text(cmdline + "\n")
+
+    if platform.machine() == "aarch64":
+        # arm64 firmware commonly publishes an ACPI serial console (SPCR), which
+        # the kernel adopts unless told otherwise; the disk passphrase prompt
+        # then goes to a serial port nobody is watching. The live ISO boots with
+        # the console on the screen; carry that to the installed system.
+        console_conf = ctx.target / "etc" / "limine-entry-tool.d" / AARCH64_CONSOLE_CONF
+        console_conf.parent.mkdir(parents=True, exist_ok=True)
+        console_conf.write_text(
+            "# aarch64: keep the console on the screen rather than the firmware's serial port.\n"
+            'KERNEL_CMDLINE[default]+=" console=tty0 acpi=nospcr"\n'
+        )
 
     limine_conf = ctx.target / esp_mount.lstrip("/") / "limine.conf"
     limine_conf.parent.mkdir(parents=True, exist_ok=True)
@@ -1463,7 +1535,7 @@ def _boot_intent(ctx: InstallContext) -> dict:
     boot = dict(ctx.omarchy_install.get("boot") or {})
     boot.setdefault("esp_mount", "/boot")
     boot.setdefault("esp_path", "/EFI/limine")
-    boot.setdefault("efi_binary", "limine_x64.efi")
+    boot.setdefault("efi_binary", _default_limine_efi_binary())
     # Protected installs used to default this off, from a time when a
     # free-space install could adopt the Windows ESP and claiming
     # EFI/BOOT/BOOTX64.EFI there would have displaced the Windows loader.
@@ -1627,7 +1699,7 @@ _BOOT_ORDER_RE = re.compile(r"^BootOrder:\s*(.*)$")
 
 
 def _read_efibootmgr() -> dict:
-    res = capture(["efibootmgr"], check=True)
+    res = capture(["efibootmgr", "--verbose"], check=True)
     entries: dict[str, str] = {}
     order: list[str] = []
     for line in res.stdout.splitlines():
@@ -1747,8 +1819,8 @@ def _debug_run(ctx: InstallContext, cmd: list[str]) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Target setup phases:
 #  1. point the target at the offline pacman.conf
-#  2. bind-mount the offline mirror + /opt/packages into /mnt for target pacman
-#     and bundled language runtimes
+#  2. bind-mount the offline mirror into /mnt for target pacman, and the
+#     bundled Node for a runtime from before Omarchy installed Node lazily
 #  3. arch-chroot as root → omarchy-apply-system --first-install
 #  4. arch-chroot as user → omarchy-provision-user --first-install
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1761,8 +1833,10 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
 
     bind_mounts = [
         ("/var/cache/omarchy/mirror/offline", "/var/cache/omarchy/mirror/offline"),
-        ("/opt/packages", "/opt/packages"),
     ]
+    # build-iso.sh bundles Node only for a runtime whose setup still unpacks it.
+    if Path("/opt/packages").is_dir():
+        bind_mounts.append(("/opt/packages", "/opt/packages"))
     ctx.state.setdefault("bind_mounts", [])
     mounted = set(ctx.state["bind_mounts"])
     for src, dst in bind_mounts:
@@ -1772,6 +1846,8 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
             subprocess.run(["mount", "--bind", src, str(target_dst)], check=True)
             ctx.state["bind_mounts"].append(str(target_dst))
             mounted.add(str(target_dst))
+
+    _copy_firmware_stage_into_target(ctx)
 
     ctx.state["target_setup_prepared"] = True
 
@@ -1941,12 +2017,10 @@ def run_system_finalizer(ctx: InstallContext) -> None:
 # stage_provisioning_state: produce the on-disk "provisioning state" the runtime's first-boot
 # setup (omarchy-provision-owner) and factory reset (omarchy-system-factory-reset) consume.
 #
-# Every install stashes the bundled Node tarball in /var/lib/omarchy/provisioning/
-# so a later factory reset can finalize the new owner's user offline. deferred-provisioning
-# installs additionally arm the first-boot setup service and, on encrypted
-# targets, stage the throwaway LUKS passphrase: the keyfile embedded in the
-# initramfs auto-unlocks boot during the provisioning window, and first-boot setup
-# re-keys the volume to the owner's password and removes it.
+# Deferred-provisioning installs arm the first-boot setup service and, on
+# encrypted targets, stage the throwaway LUKS passphrase: the keyfile embedded
+# in the initramfs auto-unlocks boot during the provisioning window, and
+# first-boot setup re-keys the volume to the owner's password and removes it.
 #
 # Runs before finalize_limine_boot so the cryptkey cmdline drop-in and the
 # keyfile land in the final UKI build.
@@ -1954,17 +2028,13 @@ def run_system_finalizer(ctx: InstallContext) -> None:
 
 PROVISION_STATE_DIR = "var/lib/omarchy/provisioning"
 PROVISION_KEYFILE = "etc/omarchy/provisioning.key"
-NODE_PACKAGES_DIR = Path("/opt/packages")
 
 
 def stage_provisioning_state(ctx: InstallContext) -> None:
-    # World-readable: first-boot finalization reads the Node tarball as the
-    # new user. The only secret inside (luks-key) is itself 0600 root.
+    # The only secret inside (luks-key) is itself 0600 root.
     provisioning_dir = ctx.target / PROVISION_STATE_DIR
     provisioning_dir.mkdir(parents=True, exist_ok=True)
     provisioning_dir.chmod(0o755)
-
-    _stage_node_tarball(ctx, provisioning_dir)
 
     if not ctx.defer_provisioning:
         return
@@ -1992,25 +2062,6 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
 
     if _provision_install_encrypted(ctx):
         _stage_provisioning_luks_unlock(ctx, provisioning_dir)
-
-
-def _stage_node_tarball(ctx: InstallContext, provisioning_dir) -> None:
-    tarballs = sorted(NODE_PACKAGES_DIR.glob("node-v*-linux-x64.tar.gz"))
-    if not tarballs:
-        # Hard error on every install, not just deferred-provisioning installs: the stash is what lets a
-        # later factory reset finalize the next owner offline, and an ISO
-        # build always bundles the tarball — its absence means a broken build.
-        raise RuntimeError(
-            f"no bundled Node tarball in {NODE_PACKAGES_DIR} — first-boot setup "
-            "and factory reset could not finalize a user offline"
-        )
-
-    packages_dir = provisioning_dir / "packages"
-    packages_dir.mkdir(parents=True, exist_ok=True)
-    target_tarball = packages_dir / tarballs[0].name
-    if not target_tarball.exists():
-        info("› stashing Node tarball for offline first-boot setup")
-        shutil.copy2(tarballs[0], target_tarball)
 
 
 def _provision_install_encrypted(ctx: InstallContext) -> bool:
@@ -2140,6 +2191,58 @@ def _is_apple_t2_hardware() -> bool:
         return False
 
 
+INITRAMFS_MODULES_CONF = "zz-omarchy-kernel-modules.conf"
+
+
+def _drop_initramfs_modules_the_kernel_lacks(ctx: InstallContext) -> None:
+    """Keep mkinitcpio from failing on a module the installed kernel was built
+    without.
+
+    The Omarchy settings name modules for the kernels Omarchy ships, thunderbolt
+    among them. mkinitcpio reports a name it cannot find as an error, and
+    limine-mkinitcpio-hook then builds the unified kernel image but does not
+    install it: Arch Linux ARM's linux-aarch64 has no thunderbolt module, and
+    the machine was left with no kernel to boot. A drop-in that sorts last takes
+    the names this kernel lacks back out of MODULES.
+    """
+    conf_dir = ctx.target / "etc" / "mkinitcpio.conf.d"
+    drop_in = conf_dir / INITRAMFS_MODULES_CONF
+    listed: list[str] = []
+    for conf in sorted(conf_dir.glob("*.conf")) if conf_dir.is_dir() else []:
+        if conf.name == INITRAMFS_MODULES_CONF:
+            continue
+        for match in re.finditer(r"^\s*MODULES\+?=\(([^)]*)\)", conf.read_text(), re.M):
+            listed += [name.strip("\"'") for name in match.group(1).split()]
+
+    missing: list[str] = []
+    for directory, _ in _kernel_directories(ctx):
+        for module in listed:
+            if module in missing or not re.fullmatch(r"[A-Za-z0-9_-]+", module):
+                continue
+            found = subprocess.run(
+                ["modinfo", "--basedir", str(ctx.target), "-k", directory.name, module],
+                capture_output=True,
+            )
+            if found.returncode != 0:
+                missing.append(module)
+
+    if not missing:
+        drop_in.unlink(missing_ok=True)
+        return
+    info(f"› leaving out of the initramfs, not in this kernel: {' '.join(missing)}")
+    drop_in.write_text(
+        "# Written by the Omarchy installer. The installed kernel has no such\n"
+        "# modules, and mkinitcpio fails on a module it cannot find.\n"
+        f"_omarchy_absent=({' '.join(missing)})\n"
+        "_omarchy_kept=()\n"
+        'for _omarchy_module in "${MODULES[@]}"; do\n'
+        '  [[ " ${_omarchy_absent[*]} " == *" $_omarchy_module "* ]] || _omarchy_kept+=("$_omarchy_module")\n'
+        "done\n"
+        'MODULES=("${_omarchy_kept[@]}")\n'
+        "unset _omarchy_absent _omarchy_kept _omarchy_module\n"
+    )
+
+
 def finalize_limine_boot(ctx: InstallContext) -> None:
     """Finalize Limine after target system setup has written all dynamic
     boot drop-ins (hibernation, hardware quirks, protected-mode ESP settings).
@@ -2183,6 +2286,8 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     limine_conf = esp_root / "limine.conf"
     if not limine_conf.exists():
         raise RuntimeError(f"{limine_conf} missing")
+
+    _drop_initramfs_modules_the_kernel_lacks(ctx)
 
     # limine-update, run as its two steps so that each is timed.
     with _time_step("LIMINE.limine-install --no-efi-register"):
@@ -2244,7 +2349,12 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     if prebuilt_uki.is_file() and not skip_prebuilt and not arch.has_uefi():
         info("› BIOS firmware; the pre-built UKI is UEFI-only, building the boot files on this machine")
 
-    if prebuilt_uki.is_file() and not skip_prebuilt and arch.has_uefi():
+    # A board with a platform of its own boots by its hardware scripts' rules
+    # (the N1x: the console on the panel in every entry, a fallback UKI as the
+    # rescue entry; validate_boot checks them), which limine-mkinitcpio applies
+    # and a UKI built in the image cannot know. Every other machine, a generic
+    # aarch64 one included, takes the image's UKI.
+    if prebuilt_uki.is_file() and not skip_prebuilt and arch.has_uefi() and not _arm_platform_boot():
         used_prebuilt_uki = True
         with _time_step("LIMINE.deploy_prebuilt_uki (copy from image)"):
             esp_uki.parent.mkdir(parents=True, exist_ok=True)
@@ -2524,6 +2634,17 @@ def configure_ssh_access(ctx: InstallContext) -> None:
         raise RuntimeError(f"ufw did not record an allow rule for port 22 in {rules}")
 
 
+# DEV ONLY (N1x bring-up): only the N1x development ISO carries this script
+# (builder/n1x-dev-ssh), and build_phases lists this phase only when it is
+# there. It authorizes the development key for root on the installed system.
+DEV_SSH_SCRIPT = Path("/usr/local/sbin/omarchy-n1x-dev-ssh")
+
+
+def configure_dev_ssh(ctx: InstallContext) -> None:
+    info("› DEV ONLY: authorizing the N1x development SSH key for root")
+    subprocess.run([str(DEV_SSH_SCRIPT), "--target", str(ctx.target)], check=True)
+
+
 def _authorized_keys(path: Path) -> list[str]:
     """Read the autoinstall authorized_keys: sshd's own format, one public key
     per line, with blank lines and # comments dropped.
@@ -2673,6 +2794,8 @@ def validate_boot(ctx: InstallContext) -> None:
     if "Omarchy" not in limine_conf_text:
         raise RuntimeError(f"{limine_conf} has no Omarchy entry")
 
+    _validate_platform_boot_entries(limine_conf_text, _installed_arm_platform(ctx), iso_kernel())
+
     kernel_cmdline = ctx.target / "etc" / "kernel" / "cmdline"
     if not kernel_cmdline.exists():
         raise RuntimeError(f"{kernel_cmdline} missing — UKI would have no cmdline")
@@ -2688,21 +2811,24 @@ def validate_boot(ctx: InstallContext) -> None:
     kernel = storage.get("kernel") or (ctx.user_configuration.get("kernels") or ["linux-omarchy"])[0]
 
     if arch.has_uefi():
-        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", "limine_x64.efi")
+        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", _default_limine_efi_binary())
         if not limine_binary.exists() or limine_binary.stat().st_size == 0:
             raise RuntimeError(f"{limine_binary} missing or empty")
 
-        # Hardware packages (omarchy-hw-intel-ptl, …) can swap the configured
-        # kernel out mid-install, so trust what's on disk over what we asked
-        # for. But while the configured kernel is installed, require its own
-        # UKI: the image always carries the prebuilt stock UKI, which must not
-        # hide a failed linux-t2 build (the rule of omacom/omarchy-iso#145).
-        uki_dir = esp_mount / "EFI" / "Linux"
-        installed_kernels = _installed_kernels(ctx)
-        candidates = [kernel] if kernel in installed_kernels else installed_kernels or [kernel]
-        ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
-        if not any(uki.exists() and uki.stat().st_size for uki in ukis):
-            raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
+        if _limine_setting(config_text, "ENABLE_UKI", "yes") == "no":
+            _validate_linux_boot_entry(esp_mount, limine_conf_text, ctx.encrypt)
+        else:
+            # Hardware packages (omarchy-hw-intel-ptl, …) can swap the configured
+            # kernel out mid-install, so trust what's on disk over what we asked
+            # for. But while the configured kernel is installed, require its own
+            # UKI: the image always carries the prebuilt stock UKI, which must not
+            # hide a failed linux-t2 build (the rule of omacom/omarchy-iso#145).
+            uki_dir = esp_mount / "EFI" / "Linux"
+            installed_kernels = _installed_kernels(ctx)
+            candidates = [kernel] if kernel in installed_kernels else installed_kernels or [kernel]
+            ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
+            if not any(uki.exists() and uki.stat().st_size for uki in ukis):
+                raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
 
         _validate_uefi_boot_routes(esp_mount)
 
@@ -2711,6 +2837,193 @@ def validate_boot(ctx: InstallContext) -> None:
 
     if ctx.defer_provisioning:
         _validate_provisioning_state(ctx)
+
+    _validate_package_signing(ctx)
+
+
+OFFLINE_MIRROR = Path("/var/cache/omarchy/mirror/offline")
+
+
+def _validate_package_signing(ctx: InstallContext, mirror: Path = OFFLINE_MIRROR) -> None:
+    """The installed keyring must trust the packages its repositories ship.
+
+    The install itself never checks a signature (SigLevel = Never), so a target
+    keyring missing a distribution key only shows up at the first online pacman
+    run. On aarch64 every Arch Linux ARM package carries its build key's
+    signature, and the offline mirror keeps them. Verify one against the target
+    keyring and require the full or ultimate validity pacman requires."""
+    if platform.machine() != "aarch64":
+        return
+
+    # The keyring is populated by a unit that runs on through the install;
+    # read it finished. create_factory_snapshot's join is then a no-op.
+    _join_target_keyring_init(ctx)
+
+    signatures = sorted(mirror.glob("archlinuxarm-keyring-*.pkg.tar.*.sig"))
+    if not signatures:
+        raise RuntimeError(f"no archlinuxarm-keyring signature in {mirror} to check the target keyring against")
+    signature = signatures[-1]
+    package = signature.with_suffix("")
+
+    gnupg = ctx.target / "etc/pacman.d/gnupg"
+    try:
+        result = subprocess.run(
+            ["gpg", "--homedir", str(gnupg), "--batch", "--no-permission-warning",
+             "--status-fd", "1", "--verify", str(signature), str(package)],
+            capture_output=True, text=True,
+        )
+    finally:
+        # Nothing should be left holding the target mount when it is unmounted.
+        subprocess.run(["gpgconf", "--homedir", str(gnupg), "--kill", "all"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    statuses = [line.split()[1] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] ")]
+    if result.returncode != 0 or "VALIDSIG" not in statuses or not {"TRUST_FULLY", "TRUST_ULTIMATE"} & set(statuses):
+        raise RuntimeError(
+            f"the installed pacman keyring does not trust the Arch Linux ARM signature on {package.name}; "
+            "every online package install would fail with 'unknown trust'"
+        )
+
+
+# The N1x firmware publishes an ACPI SPCR serial console the kernel adopts
+# unless told otherwise, and Limine hands each entry's cmdline to the UKI as
+# load options that replace the embedded one. So the contract has to hold in
+# the generated limine.conf itself: every entry keeps the console on the panel,
+# and the rescue entry boots to a text login. Both failures look like a black
+# screen, which is how the first N1x installs went.
+N1X_REQUIRED_CMDLINE = ("console=tty0", "acpi=nospcr")
+
+
+def _limine_entries(limine_conf_text: str) -> list[tuple[str, dict[str, str]]]:
+    entries: list[tuple[str, dict[str, str]]] = []
+    for line in limine_conf_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("/"):
+            entries.append((stripped, {}))
+        elif entries and ":" in stripped:
+            key, value = stripped.split(":", 1)
+            entries[-1][1][key.strip().lower()] = value.strip()
+    return entries
+
+
+def _base_package_file(share: Path = Path("/usr/share/omarchy-iso")) -> Path:
+    """The default set for the platform this machine is, where the image
+    carries one; the plain list for every other machine."""
+    detected = hw_platform()
+    platform_list = share / f"omarchy-base.{detected}.packages"
+    if detected and platform_list.is_file():
+        return platform_list
+    return share / "omarchy-base.packages"
+
+
+def _platform_delta_packages(target: Path, share: Path = Path("/usr/share/omarchy-iso")) -> list[str]:
+    """What this machine's platform default set adds to the image, which is
+    built from the plain set: nothing on a machine without one."""
+    base_pkgs_file = _base_package_file(share)
+    if base_pkgs_file.name == "omarchy-base.packages":
+        return []
+    pkgs: list[str] = []
+    for raw in base_pkgs_file.read_text().splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#") or s in pkgs:
+            continue
+        if not arch.target_has_package(target, s):
+            pkgs.append(s)
+    return pkgs
+
+
+def _arm_platform_boot() -> bool:
+    """Whether this is an aarch64 board with a platform of its own, whose
+    boot entries its hardware scripts set up (hw_platform says "aarch64" on a
+    generic one)."""
+    return platform.machine() == "aarch64" and hw_platform() not in ("", "aarch64")
+
+
+def _installed_arm_platform(ctx: InstallContext) -> str:
+    """"n1x" when the machine being installed is one, as the target's own
+    detector says.
+
+    The platform's boot contract comes from its hardware script, which only runs
+    on that hardware; any other machine gets its own setup and is validated as
+    such."""
+    if platform.machine() != "aarch64":
+        return ""
+    detected = subprocess.run(
+        ["arch-chroot", str(ctx.target), "omarchy-hw-n1x"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return "n1x" if detected.returncode == 0 else ""
+
+
+def _validate_platform_boot_entries(limine_conf_text: str, arm_platform: str, kernel: str = "") -> None:
+    if arm_platform != "n1x":
+        return
+
+    # Kernel entries only: the EFI fallback entry chainloads a loader and has
+    # no cmdline of its own.
+    kernels = [
+        (name, options) for name, options in _limine_entries(limine_conf_text)
+        if "cmdline" in options or "/EFI/Linux/" in options.get("path", "")
+    ]
+    if not kernels:
+        raise RuntimeError("limine.conf has no kernel entries")
+
+    for name, options in kernels:
+        cmdline = options.get("cmdline", "").split()
+        missing = [param for param in N1X_REQUIRED_CMDLINE if param not in cmdline]
+        if missing:
+            raise RuntimeError(
+                f"limine.conf entry {name} lacks {' '.join(missing)}; its console would go to the SPCR serial port"
+            )
+
+    # The rescue entry is the kernel's fallback UKI, booted with its own cmdline.
+    rescue_name = f"{kernel}-fallback"
+    rescue = [options for _, options in kernels if f"_{rescue_name}.efi" in options.get("path", "")]
+    if not rescue:
+        raise RuntimeError(f"limine.conf has no {rescue_name} rescue entry")
+    for options in rescue:
+        cmdline = options.get("cmdline", "").split()
+        if "systemd.unit=multi-user.target" not in cmdline or "plymouth.enable=0" not in cmdline:
+            raise RuntimeError(f"{rescue_name} entry does not boot to a text login; its own cmdline was overridden")
+
+
+def _validate_linux_boot_entry(esp_mount: Path, config_text: str, encrypted: bool) -> None:
+    """Check the kernel and initramfs that limine-entry-tool copied to the ESP."""
+    # limine-entry-tool writes an indented //<kernel> entry per kernel under
+    # /+Omarchy; deeper entries belong to snapshots.
+    entries: list[list[str]] = []
+    in_omarchy = False
+    current: list[str] | None = None
+    for line in config_text.splitlines():
+        header = re.match(r"\s*(/+)\+?(.*)$", line)
+        if header:
+            depth = len(header.group(1))
+            if depth == 1:
+                in_omarchy = header.group(2).startswith("Omarchy")
+            current = [] if in_omarchy and depth == 2 else None
+            if current is not None:
+                entries.append(current)
+        elif current is not None:
+            current.append(line)
+
+    for entry in map("\n".join, entries):
+        if not re.search(r"(?m)^\s*protocol:\s*linux\s*$", entry):
+            continue
+        cmdline = re.search(r"(?m)^\s*cmdline:\s*(.*)$", entry)
+        if not cmdline or not re.search(r"(?:^|\s)root=\S+", cmdline.group(1)):
+            continue
+        if encrypted and not re.search(r"(?:^|\s)cryptdevice=\S+", cmdline.group(1)):
+            continue
+        kernel = re.findall(r"(?m)^\s*path:\s*(\S+)\s*$", entry)
+        modules = re.findall(r"(?m)^\s*module_path:\s*(\S+)\s*$", entry)
+        if not kernel or not modules:
+            continue
+        # limine-entry-tool writes boot():/<path>#<hash>; resources elsewhere
+        # don't resolve on the ESP and so fail the check.
+        files = [esp_mount / r.removeprefix("boot():").split("#", 1)[0].lstrip("/") for r in kernel + modules]
+        if all(path.is_file() and path.stat().st_size for path in files):
+            return
+    raise RuntimeError(f"{esp_mount / 'limine.conf'} has no bootable Omarchy Linux entry with a kernel and initramfs")
 
 
 def _validate_uefi_boot_routes(esp_mount: Path) -> None:
@@ -2778,9 +3091,6 @@ def _validate_provisioning_state(ctx: InstallContext) -> None:
     if not link.is_symlink():
         raise RuntimeError("deferred-provisioning install but omarchy-provision-owner.service is not enabled")
 
-    if not list((provisioning_dir / "packages").glob("node-v*.tar.gz")):
-        raise RuntimeError(f"deferred-provisioning install but no Node tarball staged in {provisioning_dir / 'packages'}")
-
     if _provision_install_encrypted(ctx):
         for required in (provisioning_dir / "luks-key", ctx.target / PROVISION_KEYFILE):
             if not required.exists():
@@ -2816,26 +3126,44 @@ def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
             raise RuntimeError(f"{path} is missing — future kernel updates would ship no UKI")
 
 
+# Arch's kernel packages leave their pkgbase next to their modules, which is
+# also the name limine-mkinitcpio-hook builds the UKI under. Arch Linux ARM's
+# linux-aarch64 leaves none, so a kernel's module directory without one is
+# named by the kernel this image was built to install. modules.builtin marks
+# a kernel's own directory: a leftover of out-of-tree modules has none.
+def _kernel_directories(ctx: InstallContext) -> list[tuple[Path, str]]:
+    found = []
+    modules = ctx.target / "usr" / "lib" / "modules"
+    for directory in sorted(modules.iterdir()) if modules.is_dir() else []:
+        pkgbase = directory / "pkgbase"
+        if pkgbase.is_file():
+            name = pkgbase.read_text().strip()
+        elif (directory / "modules.builtin").is_file():
+            name = iso_kernel()
+        else:
+            continue
+        if name:
+            found.append((directory, name))
+    return found
+
+
 def _validate_kernel_headers(ctx: InstallContext) -> None:
-    kernels = sorted((ctx.target / "usr/lib/modules").glob("*/pkgbase"))
+    kernels = _kernel_directories(ctx)
     if not kernels:
         raise RuntimeError("no installed kernel found in target")
-    for pkgbase in kernels:
-        release = pkgbase.parent.name
-        header_release = pkgbase.parent / "build/include/config/kernel.release"
+    for directory, name in kernels:
+        release = directory.name
+        header_release = directory / "build/include/config/kernel.release"
         if not header_release.is_file():
-            raise RuntimeError(f"{pkgbase.read_text().strip()} ({release}) has no kernel headers")
+            raise RuntimeError(f"{name} ({release}) has no kernel headers")
         if header_release.read_text().strip() != release:
-            raise RuntimeError(f"{pkgbase.read_text().strip()} headers do not match kernel {release}")
+            raise RuntimeError(f"{name} headers do not match kernel {release}")
 
 
-# Every kernel package leaves its pkgbase next to its modules, which is also
-# the name limine-mkinitcpio-hook builds the UKI under.
 def _installed_kernels(ctx: InstallContext) -> list[str]:
     names = []
-    for pkgbase in sorted((ctx.target / "usr" / "lib" / "modules").glob("*/pkgbase")):
-        name = pkgbase.read_text().strip()
-        if name and name not in names:
+    for _, name in _kernel_directories(ctx):
+        if name not in names:
             names.append(name)
     return names
 

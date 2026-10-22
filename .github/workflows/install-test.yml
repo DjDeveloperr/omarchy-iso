@@ -1,64 +1,149 @@
 name: Install test
 
-# Builds the ISO a pull request produces once, then installs it unattended in
-# KVM guests, one job per variant: the default install and the encrypted one
-# run every scenario in test/integration.d/, the others install a machine the
-# default does not cover (another keyboard, a small disk, little memory, BIOS
-# firmware, a slow medium) and run the scenarios that concern it. The default
-# variant's install and boot times are what every later change is measured
-# against in its own PR.
+# Builds the ISO a pull request produces once per architecture, then installs
+# it unattended in KVM guests. On x86_64, one job per variant: the default
+# install and the encrypted one run every scenario in test/integration.d/, the
+# others install a machine the default does not cover (another keyboard, a
+# small disk, little memory, BIOS firmware, a slow medium) and run the
+# scenarios that concern it. On aarch64, the live ISO, the install, and the
+# install as an N1x. The default variant's build, install and boot times are
+# what every later change is measured against in its own PR.
 
 on:
   pull_request:
   # Each merge records quattro's numbers, which PR comments compare against.
   push:
     branches: [quattro]
+  # By hand, the ISO can be built from another package channel: rc builds a
+  # release candidate the way omarchy-release does (omarchy-iso-make --rc), to
+  # test a fresh install of it, on both architectures, and stable the release
+  # the same way. A pull request builds x86_64 from stable and aarch64 from
+  # edge.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Package channel the ISO is built from (a pull request: stable on x86_64, edge on aarch64)"
+        type: choice
+        options: [stable, rc, edge]
+        default: stable
 
 permissions:
   contents: read
 
 concurrency:
-  group: install-test-${{ github.event.pull_request.number || github.ref }}
+  group: install-test-${{ github.event.pull_request.number || github.ref }}-${{ inputs.channel || 'stable' }}
   cancel-in-progress: true
 
 jobs:
+  # Our Namespace runners are for people we trust, by the rule omarchy-pkgs
+  # builds by: a collaborator with write access, or someone in
+  # .github/VOUCHED.td (read from the default branch, so a pull request cannot
+  # vouch for itself). Whether the pull request comes from a fork does not
+  # matter. Anyone else gets GitHub's runner.
+  #
+  # This chooses the runner for an honest pull request. It does not stop a
+  # dishonest one: GitHub runs a pull request's own copy of this file, which
+  # can ask for any runner. What stops that is the repository holding outside
+  # contributors' workflow runs until a maintainer approves them (Settings,
+  # Actions, "Approval for running fork pull request workflows").
+  trust:
+    name: "Is the author trusted to use our runners"
+    runs-on: ubuntu-26.04
+    outputs:
+      trusted: ${{ steps.gate.outputs.trusted }}
+    steps:
+      # A lookup that fails must not stop the test: the author is then
+      # untrusted and the test runs on GitHub's runner.
+      - id: vouch
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: mitchellh/vouch/action/check-user@d66fa29a64600490892131ad87597c30c91fcac4 # v1
+        with:
+          user: ${{ github.event.pull_request.user.login }}
+          allow-fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: gate
+        env:
+          # A push to quattro or a manual run is ours already.
+          STATUS: ${{ github.event_name != 'pull_request' && 'ours' || steps.vouch.outputs.status }}
+          AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+        run: |
+          case "$STATUS" in
+            ours | collaborator | vouched) trusted=true ;;
+            # Any GitHub App's account counts as a bot, so only the ones that
+            # work in this repository are trusted.
+            bot) case "$AUTHOR" in 'dependabot[bot]' | 'github-actions[bot]') trusted=true ;; *) trusted=false ;; esac ;;
+            *) trusted=false ;;
+          esac
+          echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+          echo "$AUTHOR: $STATUS, trusted=$trusted" | tee -a "$GITHUB_STEP_SUMMARY"
+
   build:
-    name: Build the ISO
-    # Our own branches run on Namespace. A pull request from a fork stays on
-    # GitHub's runner: it is somebody else's code, and it has no business on
-    # our account's machines. No cache volume either way: what one pull
-    # request leaves in a cache the next run would trust.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
+    name: "${{ matrix.arch }}: build the ISO"
+    needs: trust
+    strategy:
+      fail-fast: false
+      matrix:
+        # A trusted author gets both architectures. Anyone else gets x86_64
+        # on GitHub's runner. No cache of build output on either runner: what
+        # one pull request leaves the next run would trust.
+        arch: ${{ fromJSON(needs.trust.outputs.trusted == 'true' && '["x86_64", "aarch64"]' || '["x86_64"]') }}
+    # aarch64 runs on Linux on Apple Silicon: the ARM runners that have KVM.
+    runs-on: ${{ needs.trust.outputs.trusted != 'true' && 'ubuntu-26.04' || matrix.arch == 'aarch64' && 'namespace-profile-arm64-linux-apple-12x32' || 'namespace-profile-linux-amd64-16x32' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
 
       # Fail early and loudly if the runner ever has less disk than this needs.
       - name: Check disk space
         run: |
           df -h /
           avail_gb=$(df -BG --output=avail / | tail -1 | tr -dc 0-9)
-          [ "$avail_gb" -ge 40 ] || { echo "::error::only ${avail_gb} GB free, the ISO build needs ~40 GB"; exit 1; }
+          [ "$avail_gb" -ge 40 ] || { echo "::error::only ${avail_gb} GB free, the ISO build and install test need ~40 GB"; exit 1; }
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: matrix.arch == 'x86_64'
 
+      # A pull request's aarch64 ISO installs what the edge channel serves, as
+      # the nightly does, on linux-omarchy: the one kernel for every aarch64
+      # board. A run by hand builds both from the channel it names. Every
+      # package comes from the package repositories, none is built here.
       - name: Build the ISO
-        run: NO_BOOT_OFFER=1 ./bin/omarchy-iso-make
+        env:
+          CHANNEL: ${{ inputs.channel || (matrix.arch == 'aarch64' && 'edge' || 'stable') }}
+        run: |
+          start=$(date +%s)
+          case $CHANNEL in
+            rc) flag=--rc ;;
+            edge) flag=--edge ;;
+            *) flag= ;;
+          esac
+          if [[ ${{ matrix.arch }} == aarch64 ]]; then
+            ./bin/omarchy-iso-make --arch aarch64 $flag --no-boot-offer
+          else
+            NO_BOOT_OFFER=1 ./bin/omarchy-iso-make $flag
+          fi
+          mkdir -p test-runs && echo $(( $(date +%s) - start )) >test-runs/build-seconds
 
       # Already compressed, and only the jobs below read it.
       - name: Hand the ISO to the install jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: iso-${{ github.run_id }}-${{ github.run_attempt }}
-          path: release/*.iso
+          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          path: |
+            release/*.iso
+            test-runs/build-seconds
           compression-level: 0
           retention-days: 1
 
   install:
-    name: ${{ matrix.variant }}
-    needs: build
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
+    name: "x86_64: ${{ matrix.variant }}"
+    needs: [trust, build]
+    runs-on: ${{ needs.trust.outputs.trusted != 'true' && 'ubuntu-26.04' || 'namespace-profile-linux-amd64-16x32' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -100,12 +185,14 @@ jobs:
             env: OMARCHY_INTEGRATION_ENCRYPT=true OMARCHY_ISO_THROTTLE_BPS=31457280
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
 
       - name: Fetch the ISO
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: iso-${{ github.run_id }}-${{ github.run_attempt }}
-          path: release
+          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-x86_64
 
       # The harness runs in an Arch container: Arch's current QEMU and OVMF
       # (QEMU 11) instead of the runner's older one, at the paths the
@@ -157,14 +244,18 @@ jobs:
         run: |
           mkdir -p test-runs
           sudo chown -R "$(id -u):$(id -g)" test-runs
+          echo "${{ job.status }}" >test-runs/status
 
       - name: Report times
         if: always()
         run: |
           base=$(ls -d test-runs/*-integration* 2>/dev/null | head -1)
+          boot() { head -1 "$1" | sed -E 's/in [^+]*\(firmware\) \+ /in /; s/ *=.*//'; }
           [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
-            echo "## Install test: ${{ matrix.variant }}"
+            echo "## Install test: x86_64, ${{ matrix.variant }}"
+            echo
+            echo "Channel: \`${{ inputs.channel || 'stable' }}\`"
             echo
             if [ -f "$base/omarchy-install-timing.json" ]; then
               jq -r '"**Install:** \((.finished_at - .started_at) * 10 | round / 10) s across \(.phases | length) phases"' "$base/omarchy-install-timing.json"
@@ -175,12 +266,12 @@ jobs:
               echo
             fi
             if [ -f "$base/first-boot-systemd-analyze.txt" ]; then
-              echo "**First boot:** $(head -1 "$base/first-boot-systemd-analyze.txt")"
+              echo "**First boot:** $(boot "$base/first-boot-systemd-analyze.txt")"
               echo
             fi
             boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1)
             if [ -n "$boot_dir" ] && [ -f "$boot_dir/systemd-analyze.txt" ]; then
-              echo "**Everyday boot:** $(head -1 "$boot_dir/systemd-analyze.txt")"
+              echo "**Everyday boot:** $(boot "$boot_dir/systemd-analyze.txt")"
               echo
               echo "System state: $(jq -r .system_state "$boot_dir/boot-timing.json" 2>/dev/null)"
             fi
@@ -196,10 +287,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          # The comment workflow reads the default variant's artifact by this name.
-          name: install-test-${{ matrix.variant != 'default' && format('{0}-', matrix.variant) || '' }}${{ github.run_id }}-${{ github.run_attempt }}
+          # The comment workflow reads install-test-<run>-<attempt>*: the default
+          # variant's and the aarch64 job's artifacts.
+          name: install-test-${{ matrix.variant != 'default' && format('{0}-', matrix.variant) || '' }}${{ github.run_id }}-${{ github.run_attempt }}-x86_64
           path: |
             test-runs/pr-number
+            test-runs/status
+            test-runs/build-seconds
+            test-runs/*/checks
+            test-runs/*/*.png
+            test-runs/*/serial.log
+            test-runs/*/shots/*.png
             test-runs/*/omarchy-install-timing.json
             test-runs/*/omarchy-install.log
             test-runs/*/first-boot-systemd-analyze.txt
@@ -209,3 +307,104 @@ jobs:
             test-runs/*/runs/**/*.log
           if-no-files-found: ignore
           retention-days: 14
+
+  install-aarch64:
+    name: "aarch64: install it unattended, boot the result"
+    needs: [trust, build]
+    # Only a trusted author's run builds aarch64 (the build job's matrix).
+    if: needs.trust.outputs.trusted == 'true'
+    runs-on: namespace-profile-arm64-linux-apple-12x32
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Fetch the ISO
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-aarch64
+
+      # The same on aarch64, by its own tests, in the image the ISO is built
+      # in: first the live ISO to its installer, then the install.
+      - name: Install unattended, then boot the installed system (aarch64)
+        run: |
+          sudo chmod 0666 /dev/kvm
+          ./test/arm64-container ./test/arm64-live-boot release/*.iso test-runs/aarch64-live
+          ./test/arm64-container ./test/arm64-install release/*.iso test-runs/aarch64-integration
+          # The same ISO once more, as an N1x: the default set and the NVIDIA
+          # module that the installer gives that laptop.
+          PLATFORM=aarch64-n1x ./test/arm64-container ./test/arm64-install release/*.iso test-runs/aarch64-n1x
+
+      # The harness ran as root in its container: test-runs and what QEMU
+      # wrote there (the serial logs) belong to root until this step.
+      - name: Hand the results to the runner's user
+        if: always()
+        run: |
+          mkdir -p test-runs
+          sudo chown -R "$(id -u):$(id -g)" test-runs
+          echo "${{ job.status }}" >test-runs/status
+
+      - name: Report times
+        if: always()
+        run: |
+          base=$(ls -d test-runs/*-integration 2>/dev/null | head -1)
+          # Without the firmware's share and the total it is part of: in the
+          # aarch64 VM that is the runner's uptime, not the guest's.
+          boot() { head -1 "$1" | sed -E 's/in [^+]*\(firmware\) \+ /in /; s/ *=.*//'; }
+          [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          {
+            echo "## Install test: aarch64"
+            echo
+            echo "Channel: \`${{ inputs.channel || 'edge' }}\`"
+            echo
+            if [ -f "$base/omarchy-install-timing.json" ]; then
+              jq -r '"**Install:** \((.finished_at - .started_at) * 10 | round / 10) s across \(.phases | length) phases"' "$base/omarchy-install-timing.json"
+              echo
+              echo "| Phase | Seconds |"
+              echo "| --- | ---: |"
+              jq -r '.phases[] | "| \(.name) | \(.elapsed * 10 | round / 10) |"' "$base/omarchy-install-timing.json"
+              echo
+            fi
+            if [ -f "$base/first-boot-systemd-analyze.txt" ]; then
+              echo "**First boot:** $(boot "$base/first-boot-systemd-analyze.txt")"
+              echo
+            fi
+            boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1)
+            if [ -n "$boot_dir" ] && [ -f "$boot_dir/systemd-analyze.txt" ]; then
+              echo "**Everyday boot:** $(boot "$boot_dir/systemd-analyze.txt")"
+              echo
+              echo "System state: $(jq -r .system_state "$boot_dir/boot-timing.json" 2>/dev/null)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The comment workflow runs from quattro and reads only this artifact;
+      # it needs the PR number, which a workflow_run event omits for forks.
+      - name: Record the pull request
+        if: always() && github.event_name == 'pull_request'
+        run: echo "${{ github.event.pull_request.number }}" > test-runs/pr-number
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: install-test-${{ github.run_id }}-${{ github.run_attempt }}-aarch64
+          path: |
+            test-runs/pr-number
+            test-runs/status
+            test-runs/build-seconds
+            test-runs/*/checks
+            test-runs/*/*.png
+            test-runs/*/serial.log
+            test-runs/*/shots/*.png
+            test-runs/*/omarchy-install-timing.json
+            test-runs/*/omarchy-install.log
+            test-runs/*/first-boot-systemd-analyze.txt
+            test-runs/*/runs/**/*.png
+            test-runs/*/runs/**/*.txt
+            test-runs/*/runs/**/*.json
+            test-runs/*/runs/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
