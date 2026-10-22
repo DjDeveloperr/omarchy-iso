@@ -96,3 +96,14 @@ slept=$(<"$work/slept")
 grep -q "Timed out after ${INSTALL_TIMEOUT}s" "$work/out" || fail "no timeout message: $(tail -n3 "$work/out")"
 ((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s"
 echo "ok - typing the passphrase blind counts against the install timeout"
+
+# The same for a passphrase prompt OCR can read, typed into again and again
+# (a passphrase the guest keeps refusing).
+ocr_screen() { echo "A password is required to access the root volume:"; }
+
+echo 0 >"$work/slept"
+run wait_for_unattended_install install
+slept=$(<"$work/slept")
+((status == 1)) || fail "a refused passphrase did not time out (status $status): $(tail -n3 "$work/out")"
+((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s at the passphrase prompt"
+echo "ok - typing at the passphrase prompt counts against the install timeout"
