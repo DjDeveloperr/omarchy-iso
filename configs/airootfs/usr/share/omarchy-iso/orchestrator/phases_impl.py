@@ -1350,7 +1350,7 @@ def _warn_boot_entry_refused(reason: str) -> None:
     """
     error(
         f"Warning: this firmware would not register a 'Limine' UEFI boot entry. {reason}. "
-        "The install continues, because Omarchy also deploys EFI/BOOT/BOOTX64.EFI on its "
+        f"The install continues, because Omarchy also deploys EFI/BOOT/BOOT{_efi_arch_suffix()}.EFI on its "
         "own EFI partition and firmware takes that path when nothing in NVRAM matches. "
         "The boot check at the end of the install stops an install that ends up with "
         "neither route."
@@ -3108,9 +3108,9 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
 
     The named "Limine" boot variable is the route we prefer and the one
     _register_limine_efi_entry created and read back. The removable path
-    EFI/BOOT/BOOTX64.EFI is the one every UEFI implementation tries when
-    nothing in NVRAM matches, and limine-install deploys it from
-    ENABLE_LIMINE_FALLBACK during finalize_limine_boot.
+    EFI/BOOT/BOOTX64.EFI (BOOTAA64.EFI on aarch64) is the one every UEFI
+    implementation tries when nothing in NVRAM matches, and limine-install
+    deploys it from ENABLE_LIMINE_FALLBACK during finalize_limine_boot.
 
     Either alone boots the machine, so neither is fatal by itself. Losing
     both is: that install reboots into whatever else is on the disk with no
@@ -3118,7 +3118,7 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     it before the install ends is the case worth naming, because nothing
     else in the install notices.
     """
-    fallback_binary = esp_mount / "EFI" / "BOOT" / "BOOTX64.EFI"
+    fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
     has_fallback = fallback_binary.exists() and fallback_binary.stat().st_size > 0
     # Only an entry naming this ESP counts: next to another Omarchy, its
     # "Limine" entry says nothing about whether ours survived. If the ESP's

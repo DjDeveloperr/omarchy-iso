@@ -197,6 +197,16 @@ class BootRouteValidationTest(unittest.TestCase):
         warn = self.validate({"0002": "Limine"})
         warn.assert_called_once()
 
+    def test_arm_fallback_alone_is_a_route(self):
+        # aarch64 firmware looks for EFI/BOOT/BOOTAA64.EFI, not BOOTX64.EFI.
+        path = self.esp / "EFI" / "BOOT" / "BOOTAA64.EFI"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"MZ")
+        with mock.patch.object(phases_impl.platform, "machine", return_value="aarch64"):
+            warn = self.validate({"0000": "Windows Boot Manager"})
+        warn.assert_called_once()
+        self.assertIn("BOOTAA64.EFI", warn.call_args[0][0])
+
     def test_no_route_at_all_stops_the_install(self):
         state = {"entries": {"0000": "Windows Boot Manager"}, "order": ["0000"], "raw": ""}
         with mock.patch.object(phases_impl, "_read_efibootmgr", return_value=state):
