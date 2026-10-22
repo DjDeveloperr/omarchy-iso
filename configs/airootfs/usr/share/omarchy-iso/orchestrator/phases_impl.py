@@ -1254,6 +1254,24 @@ def _register_limine_efi_entry(
             "the top of the firmware's own boot priority list to make it the default."
         )
 
+    # Some firmware keeps its own priority list and writes it back over
+    # BootOrder at the next POST. An MSI MAG Z690 Tomahawk (BIOS 7D32v1O)
+    # moved this entry behind Windows and the other install's, so "Reboot
+    # Now" after a free-space install started the other install. BootNext is
+    # read before BootOrder and that firmware honours it, so the first boot
+    # reaches what was just installed whatever happens to BootOrder.
+    nexted = subprocess.run(
+        ["efibootmgr", "--bootnext", limine_num],
+        check=False, capture_output=True, text=True,
+    )
+    if nexted.returncode != 0:
+        next_detail = (nexted.stderr or "").strip() or f"exit status {nexted.returncode}"
+        error(
+            f"Warning: this firmware would not set BootNext to the 'Limine' entry ({next_detail}). "
+            "If the first reboot starts another system, pick Omarchy from the firmware "
+            "boot menu (F11, F12 or Esc on most boards)."
+        )
+
 
 def _warn_boot_entry_refused(reason: str) -> None:
     """Registration failed. Report it and carry on to the removable-media route.
