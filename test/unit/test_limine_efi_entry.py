@@ -210,6 +210,58 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertIn("0003", nvram["entries"])
         self.assertEqual(nvram["order"][0], "0000")
 
+    def test_other_loaders_on_this_esp_survive(self):
+        # Only an entry identical to the one created is replaced: same label,
+        # this ESP and this loader. A backup loader on the same ESP, or an
+        # entry someone labelled differently, is not ours to delete. The old
+        # entry still counts when the listing prints its path in upper case,
+        # and a BootOrder number with no entry behind it is dropped.
+        backup = self.entry("Limine", OURS, part=3, loader="\\EFI\\backup\\limine.efi")
+        relabelled = self.entry("Limine backup", OURS, part=3)
+        self.nvram_with(
+            {
+                "0003": [label.upper() for label in self.entry("Limine", OURS, part=3)],
+                "0005": backup,
+                "0006": relabelled,
+            },
+            ["0003", "0005", "0006", "FFFF"],
+        )
+        nvram = self.register()
+        self.assertNotIn("0003", nvram["entries"])
+        self.assertEqual(nvram["entries"]["0005"], backup)
+        self.assertEqual(nvram["entries"]["0006"], relabelled)
+        self.assertEqual(nvram["order"], ["0000", "0005", "0006"])
+
+    def test_an_old_entry_that_cannot_be_deleted_is_not_taken_for_the_new_one(self):
+        # 0000 is taken, the old 0001 refuses to go, the new entry lands on
+        # 0002. 0001 is still the old entry, so BootNext and the front of
+        # BootOrder go to 0002 and 0001 stays behind it.
+        self.nvram_with(
+            {
+                "0000": self.entry("Windows Boot Manager", WINDOWS, loader="\\EFI\\Microsoft\\Boot\\bootmgfw.efi"),
+                "0001": self.entry("Limine", OURS, part=3),
+            },
+            ["0001", "0000"],
+        )
+        with mock.patch.dict(os.environ, {"FAKE_REFUSE_DELETE": "1"}), \
+                mock.patch.object(phases_impl, "error", lambda _message: None):
+            nvram = self.register()
+        self.assertEqual(nvram["entries"]["0002"], self.entry("Limine", OURS, part=3))
+        self.assertEqual(nvram.get("next"), "0002", nvram)
+        self.assertEqual(nvram["order"], ["0002", "0001", "0000"])
+
+    def test_the_new_entry_is_the_one_that_starts_this_loader(self):
+        # Another install's "Limine" entry that the earlier listing did not
+        # show is new too, and it holds the lower number.
+        self.nvram_with({"0000": self.entry("Limine", OTHER)}, ["0000"])
+        phases_impl._register_limine_efi_entry(
+            Path("/dev/nvme1n1"), 3, LOADER, pre_state={"entries": {}, "order": []}
+        )
+        nvram = json.loads(self.nvram.read_text())
+        self.assertIn(OURS, nvram["entries"]["0001"][1])
+        self.assertEqual(nvram.get("next"), "0001", nvram)
+        self.assertEqual(nvram["order"][0], "0001")
+
     def test_a_refused_create_leaves_other_installs_alone(self):
         self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
         warnings = []
