@@ -40,10 +40,15 @@ LOADER = "\\EFI\\limine\\limine_x64.efi"
 FAKE_EFIBOOTMGR = r'''#!/usr/bin/env python3
 import json, os, sys
 path = os.environ["FAKE_NVRAM"]
-nvram = json.load(open(path))
 args = sys.argv[1:]
 with open(path + ".log", "a") as log:
     log.write(json.dumps(args) + "\n")
+# FAKE_NO_EFIVARS: a kernel without EFI runtime services (efi=noruntime, or
+# firmware that faulted and had them turned off), as efibootmgr 18 reports it.
+if os.environ.get("FAKE_NO_EFIVARS"):
+    print("EFI variables are not supported on this system.", file=sys.stderr)
+    sys.exit(2)
+nvram = json.load(open(path))
 if args in ([], ["--verbose"], ["-v"]):
     if "next" in nvram:
         print("BootNext: " + nvram["next"])
@@ -367,6 +372,52 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
                 phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
             self.nvram_with({"0004": self.entry("Limine", OTHER), "0005": self.entry("Limine", OURS, part=3)}, ["0005", "0004"])
             phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+
+    def test_an_unreadable_variable_store_skips_registration(self):
+        # Every NVRAM write would fail the same way, so none is tried, and
+        # the install goes on to write the removable loader.
+        self.nvram_with({}, [])
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            self.register()
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("EFI variables are not supported", warnings[0])
+
+    def test_an_unreadable_variable_store_does_not_stop_a_free_space_install(self):
+        # The Windows entry check compares a listing before and after; with
+        # no listing to compare, it is skipped instead of failing the phase.
+        self.nvram_with({}, [])
+        ctx = types.SimpleNamespace(
+            is_protected=True,
+            omarchy_install={"boot": {"enable_fallback": True}, "storage": {"esp_device": "/dev/nvme1n1p3"}},
+        )
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl, "_split_partition_device", return_value=("/dev/nvme1n1", 3)), \
+                mock.patch.object(phases_impl, "_install_limine_efi",
+                                  lambda _ctx, *, disk, part, pre_state, **_: phases_impl._register_limine_efi_entry(
+                                      disk, part, LOADER, pre_state=pre_state)), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            phases_impl._install_pre_mounted_limine(ctx)
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(len(warnings), 1)
+
+    def test_an_unreadable_variable_store_leaves_only_our_fallback_as_a_route(self):
+        esp = self.tmp / "esp"
+        (esp / "EFI" / "BOOT").mkdir(parents=True)
+        (esp / "EFI" / "BOOT" / "BOOTX64.EFI").write_bytes(b"MZ")
+        errors = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl.platform, "machine", return_value="x86_64"), \
+                mock.patch.object(phases_impl, "error", errors.append):
+            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("cannot be read", errors[0])
+            with self.assertRaises(RuntimeError) as caught:
+                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=False)
+        self.assertIn("cannot be read", str(caught.exception))
 
 
 if __name__ == "__main__":
