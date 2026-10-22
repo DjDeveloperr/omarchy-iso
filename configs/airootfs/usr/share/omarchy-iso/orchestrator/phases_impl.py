@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -344,8 +345,15 @@ def verify_install_medium(ctx: InstallContext) -> None:
     scheduler. The free-space configurator gate runs the same helper before it
     partitions, so both disk-touching paths clear the same check; whoever gets
     there first pays the wait. The hasher's read also leaves as much of the
-    image as fits in the page cache for the write that follows."""
-    _publish_verify_progress(ctx)
+    image as fits in the page cache for the write that follows.
+
+    The progress mirroring runs beside the helper, not before it: it waits as
+    long as a hasher is activating, and a medium that stopped answering keeps
+    it there until the size-based timeout, while the helper says so after a
+    minute without progress."""
+    helper_done = threading.Event()
+    progress = threading.Thread(target=_publish_verify_progress, args=(ctx, helper_done), daemon=True)
+    progress.start()
     try:
         result = subprocess.run(
             [ROOT_IMAGE_VERIFY_HELPER],
@@ -353,6 +361,9 @@ def verify_install_medium(ctx: InstallContext) -> None:
         )
     except OSError as exc:
         raise RuntimeError(f"could not run {ROOT_IMAGE_VERIFY_HELPER}: {exc}") from exc
+    finally:
+        helper_done.set()
+        progress.join()
 
     for line in result.stdout.splitlines():
         if line.strip():
@@ -365,14 +376,18 @@ def verify_install_medium(ctx: InstallContext) -> None:
         )
 
 
-def _publish_verify_progress(ctx: InstallContext) -> None:
+def _publish_verify_progress(ctx: InstallContext, helper_done: threading.Event | None = None) -> None:
     """While the boot-time hashers are still reading the medium, mirror how far
     they are into phase_progress so the dashboard tracks the actual hash
     instead of the phase's time-driven band: the package mirror first, then the
     root image (the order their units run in), as one fraction of the bytes
     both read. Best effort throughout: the helper is the authority on the
     verdict, and any hiccup here (unit already done, hasher between opens,
-    /proc gone) just skips a sample."""
+    /proc gone) just skips a sample. Stops once helper_done is set: the
+    helper has its verdict, even if a hasher is still activating."""
+    def hashing(state: str) -> bool:
+        return state == "activating" and not (helper_done and helper_done.is_set())
+
     try:
         image = ROOT_IMAGE.stat().st_size
     except OSError:
@@ -382,7 +397,7 @@ def _publish_verify_progress(ctx: InstallContext) -> None:
     total = image + mirror_total
     if mirror:
         state = _verify_state_when_started(MIRROR_VERIFY_UNIT)
-        while state == "activating":
+        while hashing(state):
             done = _mirror_bytes_hashed(mirror)
             if done is not None:
                 _write_phase_progress(ctx, done / total)
@@ -393,7 +408,7 @@ def _publish_verify_progress(ctx: InstallContext) -> None:
         image_state = _verify_state_when_started(ROOT_IMAGE_VERIFY_UNIT)
     else:
         image_state = _verify_unit_property("ActiveState")
-    while image and image_state == "activating":
+    while image and hashing(image_state):
         pos = _hasher_read_pos()
         if pos is not None:
             _write_phase_progress(ctx, (mirror_total + pos) / total)
@@ -1132,24 +1147,29 @@ def _register_limine_efi_entry(
     pre_state: dict | None = None,
 ) -> None:
     pre_state = pre_state or _read_efibootmgr()
-    # Replace only this ESP's own entry. Other "Limine" entries belong to other
-    # installs, such as the Omarchy a free-space install is put next to;
-    # deleting every "Limine" entry would leave those installs with none.
-    # efibootmgr prints each entry's device path, HD(part,GPT,<guid>,...), so
-    # this ESP's entries are the ones naming its partition GUID. An efibootmgr
-    # that prints no paths matches nothing, and a reinstall onto the same ESP
-    # then leaves one duplicate behind, which is harmless.
+    # Replace only an entry identical to the one created below. Other "Limine"
+    # entries belong to other installs, such as the Omarchy a free-space
+    # install is put next to; deleting every "Limine" entry would leave those
+    # installs with none. A second loader on this same ESP, such as
+    # \EFI\backup\limine.efi, is a separate boot option and stays too.
+    # An efibootmgr that prints no paths matches nothing, and a reinstall onto
+    # the same ESP then leaves one duplicate behind, which is harmless.
     esp = _partition_guid(disk, part)
     stale_limine = [
         num
-        for num in _find_label_entries(pre_state["entries"], "Limine")
-        if esp and esp in pre_state["entries"][num].lower()
+        for num, text in pre_state["entries"].items()
+        if _is_limine_entry_for(text, esp, loader)
     ]
-    for num in stale_limine:
-        subprocess.run(
+    # Only a number whose delete succeeded can come back as the new entry. One
+    # whose delete failed still holds the old entry, and stays in BootOrder.
+    deleted = [
+        num
+        for num in stale_limine
+        if subprocess.run(
             ["efibootmgr", "--bootnum", num, "--delete-bootnum"],
             check=False, capture_output=True,
-        )
+        ).returncode == 0
+    ]
 
     created = subprocess.run(
         [
@@ -1180,13 +1200,17 @@ def _register_limine_efi_entry(
 
     # The entry just created: a "Limine" entry that was not there before, or
     # that reuses the number of one deleted above. The first "Limine" entry in
-    # the list may be another install's.
+    # the list may be another install's, so one that starts this loader on
+    # this ESP comes first; a listing without device paths keeps list order.
     post_state = _read_efibootmgr()
-    new_limine = [
-        num
-        for num in _find_label_entries(post_state["entries"], "Limine")
-        if num not in pre_state["entries"] or num in stale_limine
-    ]
+    new_limine = sorted(
+        (
+            num
+            for num in _find_label_entries(post_state["entries"], "Limine")
+            if num not in pre_state["entries"] or num in deleted
+        ),
+        key=lambda num: not _is_limine_entry_for(post_state["entries"][num], esp, loader),
+    )
     if not new_limine:
         _warn_boot_entry_refused(
             "efibootmgr --create exited 0 but no 'Limine' entry is registered, so this "
@@ -1198,7 +1222,7 @@ def _register_limine_efi_entry(
     keep = [
         num
         for num in pre_state["order"]
-        if num not in stale_limine
+        if num not in deleted
         and num != limine_num
         and num in pre_state["entries"]
     ]
@@ -1249,7 +1273,7 @@ def _warn_boot_entry_refused(reason: str) -> None:
     """
     error(
         f"Warning: this firmware would not register a 'Limine' UEFI boot entry. {reason}. "
-        "The install continues, because Omarchy also deploys EFI/BOOT/BOOTX64.EFI on its "
+        f"The install continues, because Omarchy also deploys EFI/BOOT/BOOT{_efi_arch_suffix()}.EFI on its "
         "own EFI partition and firmware takes that path when nothing in NVRAM matches. "
         "The boot check at the end of the install stops an install that ends up with "
         "neither route."
@@ -1536,15 +1560,15 @@ def _boot_intent(ctx: InstallContext) -> dict:
     boot.setdefault("esp_mount", "/boot")
     boot.setdefault("esp_path", "/EFI/limine")
     boot.setdefault("efi_binary", _default_limine_efi_binary())
-    # Protected installs used to default this off, from a time when a
-    # free-space install could adopt the Windows ESP and claiming
-    # EFI/BOOT/BOOTX64.EFI there would have displaced the Windows loader.
-    # The configurator stopped adopting that ESP in "Always create our own
-    # ESP" (ef3b0e4): protected mode now formats a dedicated FAT32 ESP in
-    # free space, where the removable path is unused and ours to claim. It
-    # is also the only path left when firmware refuses or discards the
-    # "Limine" boot variable, so both modes take it.
-    boot.setdefault("enable_fallback", True)
+    # The removable path EFI/BOOT/BOOTX64.EFI is the only route left when
+    # firmware refuses or discards the "Limine" boot variable. A full-disk
+    # install owns its ESP, so it always takes it. So does a free-space
+    # install from the configurator, which formats a dedicated FAT32 ESP
+    # in free space ("Always create our own ESP", ef3b0e4) and says so with
+    # enable_fallback: true. Any other protected target is a pre-mounted one
+    # handed over as it is, whose esp_device may be another OS's ESP and its
+    # removable loader that OS's, so it is left alone unless asked for.
+    boot.setdefault("enable_fallback", not ctx.is_protected)
     return boot
 
 
@@ -1715,6 +1739,21 @@ def _read_efibootmgr() -> dict:
 
 def _find_label_entries(entries: dict[str, str], needle: str) -> list[str]:
     return [num for num, label in entries.items() if needle.lower() in label.lower()]
+
+
+def _is_limine_entry_for(entry: str, guid: str, loader: str) -> bool:
+    """Whether a `efibootmgr --verbose` entry is the one
+    _register_limine_efi_entry creates: labelled "Limine", starting `loader`
+    from the partition with GPT GUID `guid`. The listing reads
+    "Limine<TAB>HD(part,GPT,<guid>,...)/\\EFI\\...", or ".../File(\\EFI\\...)"
+    with an older efivar; FAT is case-insensitive, and so is this."""
+    label, _, path = entry.lower().partition("\t")
+    loader = loader.lower()
+    return (
+        label.strip() == "limine"
+        and bool(guid) and guid in path
+        and (f")/{loader}" in path or f"file({loader})" in path)
+    )
 
 
 def _partition_guid(disk: Path, part: int) -> str:
@@ -1906,24 +1945,33 @@ def _run_timing_scripts(cmd: list[str]) -> None:
     for a phase that runs about 50 scripts in 3 s. It prints them unbuffered as
     each script starts and ends, so the time they arrive here is the script's
     own. The output goes where it went before, stderr folded into stdout as
-    the dashboard already merges them."""
+    the dashboard already merges them.
+
+    An interrupt or a failed write stops and reaps the child before it
+    propagates, as subprocess.run does: the caller unmounts the log and tears
+    the target down next, which must not race a setup still running."""
     out = sys.stdout.buffer
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     started: dict[bytes, float] = {}
-    for line in proc.stdout:
-        now = time.monotonic()
-        out.write(line)
-        out.flush()
-        match = _OMARCHY_SCRIPT_LINE.match(line)
-        if not match:
-            continue
-        event, script = match.groups()
-        if event == b"Starting":
-            started[script] = now
-        elif script in started:
-            name = script.decode(errors="replace").removeprefix("/usr/share/omarchy/install/")
-            info(f"[step] {name}: {now - started.pop(script):.6f}s")
-    returncode = proc.wait()
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
+        try:
+            for line in proc.stdout:
+                now = time.monotonic()
+                out.write(line)
+                out.flush()
+                match = _OMARCHY_SCRIPT_LINE.match(line)
+                if not match:
+                    continue
+                event, script = match.groups()
+                if event == b"Starting":
+                    started[script] = now
+                elif script in started:
+                    name = script.decode(errors="replace").removeprefix("/usr/share/omarchy/install/")
+                    info(f"[step] {name}: {now - started.pop(script):.6f}s")
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        returncode = proc.wait()
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, cmd)
 
@@ -3031,9 +3079,9 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
 
     The named "Limine" boot variable is the route we prefer and the one
     _register_limine_efi_entry created and read back. The removable path
-    EFI/BOOT/BOOTX64.EFI is the one every UEFI implementation tries when
-    nothing in NVRAM matches, and limine-install deploys it from
-    ENABLE_LIMINE_FALLBACK during finalize_limine_boot.
+    EFI/BOOT/BOOTX64.EFI (BOOTAA64.EFI on aarch64) is the one every UEFI
+    implementation tries when nothing in NVRAM matches, and limine-install
+    deploys it from ENABLE_LIMINE_FALLBACK during finalize_limine_boot.
 
     Either alone boots the machine, so neither is fatal by itself. Losing
     both is: that install reboots into whatever else is on the disk with no
@@ -3041,7 +3089,7 @@ def _validate_uefi_boot_routes(esp_mount: Path) -> None:
     it before the install ends is the case worth naming, because nothing
     else in the install notices.
     """
-    fallback_binary = esp_mount / "EFI" / "BOOT" / "BOOTX64.EFI"
+    fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
     has_fallback = fallback_binary.exists() and fallback_binary.stat().st_size > 0
     # Only an entry naming this ESP counts: next to another Omarchy, its
     # "Limine" entry says nothing about whether ours survived. If the ESP's

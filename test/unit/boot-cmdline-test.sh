@@ -29,7 +29,8 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT"
 
-entries=$(grep -rhE '^\s*(APPEND|linux|options)\s.*archisobasedir=' \
+# chainloader: the Snapdragon entry boots a live UKI and hands it the cmdline.
+entries=$(grep -rhE '^\s*(APPEND|linux|options|chainloader)\s.*archisobasedir=' \
   configs/syslinux/archiso_sys-linux.cfg configs/syslinux/archiso_pxe-linux.cfg \
   configs/grub/grub.cfg configs/grub/loopback.cfg configs/efiboot/loader/entries)
 
