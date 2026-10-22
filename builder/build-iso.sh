@@ -20,7 +20,7 @@ source /builder/grub-platform.sh
 # package bundle mounted at /packages first when there is one.
 case "$OMARCHY_ARCH" in
   x86_64)
-    online_pacman_conf="$online_pacman_conf"
+    online_pacman_conf="/configs/pacman-online-${OMARCHY_MIRROR}.conf"
     ;;
   aarch64)
     online_pacman_conf="/configs/pacman-online-aarch64-${OMARCHY_MIRROR}.conf"
@@ -772,9 +772,10 @@ sed "/^\[options\]/a CacheDir = /var/cache/omarchy/mirror/offline/" \
 # finds it at /run/archiso/bootmnt/<install_dir>/<arch>/.
 #
 # profiledef.sh cannot be sourced standalone (its file_permissions needs
-# mkarchiso's declare -A first); read the two values it sets instead.
-iso_subdir="$(sed -n 's/^install_dir="\(.*\)"$/\1/p' "$build_cache_dir/profiledef.sh")/$(sed -n 's/^arch="\(.*\)"$/\1/p' "$build_cache_dir/profiledef.sh")"
-[[ $iso_subdir == */"$OMARCHY_ARCH" ]] || { echo "ERROR: could not read install_dir/arch from profiledef.sh: '$iso_subdir'" >&2; exit 1; }
+# mkarchiso's declare -A first); read install_dir from it. Its arch is
+# "${OMARCHY_ARCH:-x86_64}", the architecture this build is for.
+iso_subdir="$(sed -n 's/^install_dir="\(.*\)"$/\1/p' "$build_cache_dir/profiledef.sh")/$OMARCHY_ARCH"
+[[ $iso_subdir == ?*/"$OMARCHY_ARCH" ]] || { echo "ERROR: could not read install_dir from profiledef.sh: '$iso_subdir'" >&2; exit 1; }
 root_image_dir="$build_cache_dir/work/iso/$iso_subdir"
 root_image_stream="$root_image_dir/omarchy-root.img.zst"
 mkdir -p "$root_image_dir"
