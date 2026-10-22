@@ -226,7 +226,7 @@ CUSTOMIZE
   rm -rf "$build_cache_dir/syslinux" "$build_cache_dir/efiboot"
 else
   boot_splash_kernel_options="quiet splash "
-  kernel_options="xe.enable_panel_replay=0 initramfs_async=0"
+  kernel_options="xe.enable_panel_replay=0 initramfs_async=0 intel_idle.states_off=0x3fc"
 fi
 for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg"; do
   configure_grub_kernel "$grub_config" "$OMARCHY_KERNEL"
