@@ -31,6 +31,30 @@ assemble_tftp_root() {
   echo "$stamp" >"$root/.from-iso"
 }
 
+# The hands-on tool's work directory holds the VM disk and the TFTP root the
+# guest boots, so it has to be ours alone. A directory someone else created
+# first — even one we cannot write to, given a pre-stamped tftp/ — could hold
+# a disk.qcow2 symlink that qemu-img create truncates, or a kernel of their
+# choosing. Create it 0700, or accept an existing one only when we own it, no
+# one else can write to it, and neither it nor the disk is a symlink.
+private_work_dir() {
+  local dir="$1" disk="$2"
+  mkdir -p "$(dirname "$dir")"
+  mkdir -m 700 "$dir" 2>/dev/null || true
+  if [[ -L $dir || ! -d $dir || ! -O $dir ]]; then
+    echo "$dir is not a directory owned by $(id -un); pick another with --work." >&2
+    return 1
+  fi
+  if [[ -n $(find "$dir" -maxdepth 0 -perm /022) ]]; then
+    echo "$dir is writable by other users; pick another with --work." >&2
+    return 1
+  fi
+  if [[ -L $disk ]]; then
+    echo "$disk is a symlink; refusing to write a disk image through it." >&2
+    return 1
+  fi
+}
+
 # Serve the ISO as the NBD export the initramfs dials back to: name
 # 'archiso' on the well-known port, bound to the host loopback — which is
 # where the guest's 10.0.2.2 (and therefore the hook's ${pxeserver}) lands.

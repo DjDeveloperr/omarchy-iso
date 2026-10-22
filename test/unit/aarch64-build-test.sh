@@ -201,9 +201,29 @@ bash -n "$uki"
 grep -Fq 'parted systemd-ukify linux-firmware-qcom qcom-firmware-extract python)' "$ROOT/builder/build-iso.sh" \
   || fail "the live image lacks ukify or the Snapdragon firmware tools"
 # The UKI is built in the image's customize step, once pacstrap has made the
-# kernel and initramfs it wraps.
-customize=$(sed -n "/<<CUSTOMIZE$/,/^CUSTOMIZE$/p" "$ROOT/builder/build-iso.sh")
-grep -Fq 'bash /root/qualcomm-live-uki.sh $OMARCHY_KERNEL' <<<"$customize" || fail "the live UKI is not told which kernel to wrap"
+# kernel and initramfs it wraps: the builder's own lines, run against the live
+# root's customize_airootfs.sh.
+insert_uki=$(sed -n '/^  customize="\$build_cache_dir\/airootfs\/root\/customize_airootfs.sh"$/,/ "\$customize"$/p' "$ROOT/builder/build-iso.sh")
+[[ $(wc -l <<<"$insert_uki") == 3 ]] || fail "the builder no longer adds the live UKI step to customize_airootfs.sh: $insert_uki"
+mkdir -p "$fixture/cache/airootfs/root"
+live_customize="$fixture/cache/airootfs/root/customize_airootfs.sh"
+cp "$ROOT/configs/airootfs/root/customize_airootfs.sh" "$live_customize"
+(build_cache_dir="$fixture/cache" OMARCHY_KERNEL=linux-omarchy; eval "$insert_uki") || fail "the live UKI step does not go into customize_airootfs.sh"
+bash -n "$live_customize" || fail "customize_airootfs.sh is not valid bash with the live UKI step"
+uki_line=$(grep -nx 'bash /root/qualcomm-live-uki.sh linux-omarchy' "$live_customize" | cut -d: -f1 || true)
+[[ -n $uki_line ]] || fail "the live UKI is not told which kernel to wrap"
+[[ $(sed -n "$((uki_line + 1))p" "$live_customize") == 'rm -f /root/qualcomm-live-uki.sh' ]] || fail "the live UKI script stays in the image"
+# After set -euo pipefail, so a failed UKI fails the build, and before
+# anything that can end the script early.
+(( $(grep -nx 'set -euo pipefail' "$live_customize" | head -1 | cut -d: -f1) < uki_line )) || fail "the live UKI step runs before set -euo pipefail"
+first_exit=$(grep -nE '^[^#]*\bexit\b' "$live_customize" | head -1 | cut -d: -f1 || true)
+[[ -z $first_exit ]] || (( uki_line < first_exit )) || fail "customize_airootfs.sh can exit before the live UKI is built"
+# Nothing else in the script changes.
+diff <(sed '/live UKI\.$/d; /qualcomm-live-uki\.sh/d' "$live_customize" | cat -s) <(cat -s "$ROOT/configs/airootfs/root/customize_airootfs.sh") >/dev/null \
+  || fail "adding the live UKI step changed the rest of customize_airootfs.sh"
+printf '#!/bin/bash\necho no strict mode\n' >"$live_customize"
+(build_cache_dir="$fixture/cache" OMARCHY_KERNEL=linux-omarchy; eval "$insert_uki") 2>/dev/null \
+  && fail "the live UKI step was added to a customize_airootfs.sh without set -euo pipefail"
 grep -Fq -- '--devicetree-auto=$dtb' "$uki" || fail "the live UKI carries no device trees"
 grep -Fq '*-el2.dtb' "$uki" || fail "EL2 device trees, which share hardware ids with their base trees, are not left out"
 # A kernel that ships no Snapdragon device trees gets no UKI, and the build goes on.
