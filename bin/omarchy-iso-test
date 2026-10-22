@@ -136,6 +136,10 @@ case "$KEYBOARD_LABEL" in
 esac
 
 omarchy-pkg-add qemu-full edk2-ovmf socat imagemagick tesseract tesseract-data-eng
+# --battery and --acpi-hid compile their SSDT with iasl.
+if $BATTERY || ((${#ACPI_HIDS[@]})); then
+  omarchy-pkg-add acpica
+fi
 
 OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.4m.fd"
 OVMF_VARS_TEMPLATE="/usr/share/edk2/x64/OVMF_VARS.4m.fd"
@@ -299,7 +303,11 @@ DSL
       done
       echo "} }"
     } >"$dsl"
-    iasl -p "${dsl%.dsl}" "$dsl" >/dev/null 2>&1 || { echo "iasl could not compile $dsl" >&2; return 1; }
+    if ! iasl -p "${dsl%.dsl}" "$dsl" >"$RUN_DIR/fake-acpi.log" 2>&1; then
+      cat "$RUN_DIR/fake-acpi.log" >&2
+      echo "iasl could not compile $dsl" >&2
+      return 1
+    fi
     fake_args+=(-acpitable "file=${dsl%.dsl}.aml")
     log "Fake ACPI: battery=$BATTERY hids=${ACPI_HIDS[*]:-none}"
   fi

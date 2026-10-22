@@ -88,3 +88,35 @@ grep -qx "success-first-boot-no-network" "$work/captured" ||
 
 echo "ok - an offline install passes only once the installed system reaches its login"
 
+# ------------------------------------------------- --battery and --acpi-hid
+#
+# Both compile an SSDT with iasl, so the dependency setup has to bring it
+# (Arch's acpica) when either is asked for, and a table that does not compile
+# has to say why.
+
+# The setup is the block of omarchy-pkg-add lines at the top level.
+setup=$(sed -n '/^omarchy-pkg-add qemu-full/,/^$/p' "$harness")
+[[ -n $setup ]] || fail "the harness no longer installs its dependencies with omarchy-pkg-add"
+omarchy-pkg-add() { added+=("$@"); }
+dependencies() { added=(); BATTERY=$1; shift; ACPI_HIDS=("$@"); eval "$setup"; }
+
+dependencies true
+[[ " ${added[*]} " == *" acpica "* ]] || fail "--battery does not install acpica: ${added[*]}"
+dependencies false OVTI08F4
+[[ " ${added[*]} " == *" acpica "* ]] || fail "--acpi-hid does not install acpica: ${added[*]}"
+dependencies false
+[[ " ${added[*]} " != *" acpica "* ]] || fail "acpica is installed with no fake ACPI device"
+
+take start_vm
+FAKE_PCI=() FAKE_PCI_PIDS=() SMBIOS=() CPU_ID="" ACPI_HIDS=() BATTERY=true
+QMP_SOCK="$work/qmp.sock"
+iasl() { echo "fake-acpi.dsl     3: Device (BAT0) { Name (_HID, EisaId (\"PNP0C0A\"))"; echo "Error    6126 -   syntax error ^" >&2; return 255; }
+qemu-system-x86_64() { fail "QEMU started with an SSDT that did not compile"; }
+set +e
+(set -e; start_vm "$work/disk.qcow2" "$work/serial.log") 2>"$work/err"
+started=$?
+set -e
+((started != 0)) || fail "start_vm went on after iasl failed"
+grep -q "syntax error" "$work/err" || fail "the iasl error is hidden: $(cat "$work/err")"
+
+echo "ok - fake ACPI devices bring iasl with them and show its errors"
