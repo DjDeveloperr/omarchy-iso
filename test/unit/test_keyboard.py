@@ -101,7 +101,7 @@ class KeyboardConfigurationTest(unittest.TestCase):
                 )
 
     def test_input_choice_survives_while_console_keymap_stays_real(self):
-        for method, keymap, layout in (("mozc", "jp106", ""), ("mozc", "us", ""), ("hangul", "us", "kr"), ("pinyin", "us", ""), ("chewing", "us", "")):
+        for method, keymap, layout in (("mozc", "jp106", ""), ("mozc", "us", ""), ("hangul", "us", "kr"), ("hangul", "us", "kr:kr104"), ("none", "us", "la"), ("pinyin", "us", ""), ("chewing", "us", ""), ("cangjie5", "us", "")):
             with self.subTest(method=method), tempfile.TemporaryDirectory() as directory:
                 target = self.target(directory)
                 self.assertTrue(KEYBOARD.configure_keyboard(target, keymap, method, layout))
@@ -123,7 +123,7 @@ class KeyboardConfigurationTest(unittest.TestCase):
                 KEYBOARD.configure_keyboard(target, "unknown", "pinyin")
 
     def test_invalid_input_preferences_are_rejected_without_writes(self):
-        for method, layout in (("unknown", ""), ("hangul", "kr\nKEYMAP=ru")):
+        for method, layout in (("unknown", ""), ("hangul", "kr\nKEYMAP=ru"), ("hangul", "kr:dvorak"), ("none", "az")):
             with tempfile.TemporaryDirectory() as directory:
                 target = self.target(directory)
                 with self.assertRaises(ValueError):
