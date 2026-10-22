@@ -785,6 +785,7 @@ wait_for_unattended_install() {
         press ret
         blank_screens=0
         sleep 10
+        ((waited += 10))
         continue
       fi
     else

@@ -4,7 +4,7 @@
 # of the harness and run against stubs for QEMU, QMP, OCR and SSH, so what
 # the harness decides from what it sees can be checked here.
 
-# shellcheck disable=SC2034 # the variables are read by the functions taken out of the harness
+# shellcheck disable=SC2034,SC2329 # the variables and stubs are used by the functions taken out of the harness
 
 set -euo pipefail
 
@@ -78,3 +78,21 @@ run bootstrap_ssh
 grep -qx ctrl-alt-f4 "$work/pressed" || fail "the second attempt did not use tty4: $(paste -sd' ' "$work/pressed")"
 echo "ok - a console login whose password prompt never shows is retried on the next VT"
 
+# --------------------------------------- the install wait keeps to its budget
+#
+# An encrypted BIOS install whose Plymouth prompt is typed into blind, sample
+# after sample, still times out after INSTALL_TIMEOUT, not later.
+
+take wait_for_unattended_install
+ENCRYPT=true
+INSTALL_TIMEOUT=600
+ssh_guest() { false; }
+ocr_screen() { echo "OMARCHY"; } # the logo and nothing else, for ever
+
+echo 0 >"$work/slept"
+run wait_for_unattended_install install
+slept=$(<"$work/slept")
+((status == 1)) || fail "a boot stuck at the logo did not time out (status $status): $(tail -n3 "$work/out")"
+grep -q "Timed out after ${INSTALL_TIMEOUT}s" "$work/out" || fail "no timeout message: $(tail -n3 "$work/out")"
+((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s"
+echo "ok - typing the passphrase blind counts against the install timeout"
