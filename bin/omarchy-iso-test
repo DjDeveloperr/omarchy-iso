@@ -151,6 +151,13 @@ fi
 $ENCRYPT && BASE_NAME+="-encrypted"
 $PROVISION && BASE_NAME+="-provision"
 $FREE_SPACE && BASE_NAME+="-free-space"
+$NO_NETWORK && BASE_NAME+="-no-network"
+# The fake hardware changes what the install does (packages, kernel, boot
+# configuration), so --reuse-base must not boot an image installed with other
+# hardware, or none. A hash of the settings, since --smbios is free text.
+if ((${#FAKE_PCI[@]} + ${#SMBIOS[@]} + ${#ACPI_HIDS[@]})) || [[ -n $CPU_ID ]] || $BATTERY; then
+  BASE_NAME+="-hw-$(declare -p FAKE_PCI SMBIOS CPU_ID BATTERY ACPI_HIDS | sha256sum | cut -c1-12)"
+fi
 BASE_DIR="$REPO_DIR/test-runs/$BASE_NAME"
 RUN_DIR="$BASE_DIR/runs/$(date +%Y%m%d-%H%M%S)"
 BASE_DISK="$BASE_DIR/base.qcow2"
