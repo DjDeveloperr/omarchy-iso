@@ -1237,11 +1237,16 @@ def _register_limine_efi_entry(
         for num, text in pre_state["entries"].items()
         if _is_limine_entry_for(text, esp, loader)
     ]
-    for num in stale_limine:
-        subprocess.run(
+    # Only a number whose delete succeeded can come back as the new entry. One
+    # whose delete failed still holds the old entry, and stays in BootOrder.
+    deleted = [
+        num
+        for num in stale_limine
+        if subprocess.run(
             ["efibootmgr", "--bootnum", num, "--delete-bootnum"],
             check=False, capture_output=True,
-        )
+        ).returncode == 0
+    ]
 
     created = subprocess.run(
         [
@@ -1272,13 +1277,17 @@ def _register_limine_efi_entry(
 
     # The entry just created: a "Limine" entry that was not there before, or
     # that reuses the number of one deleted above. The first "Limine" entry in
-    # the list may be another install's.
+    # the list may be another install's, so one that starts this loader on
+    # this ESP comes first; a listing without device paths keeps list order.
     post_state = _read_efibootmgr()
-    new_limine = [
-        num
-        for num in _find_label_entries(post_state["entries"], "Limine")
-        if num not in pre_state["entries"] or num in stale_limine
-    ]
+    new_limine = sorted(
+        (
+            num
+            for num in _find_label_entries(post_state["entries"], "Limine")
+            if num not in pre_state["entries"] or num in deleted
+        ),
+        key=lambda num: not _is_limine_entry_for(post_state["entries"][num], esp, loader),
+    )
     if not new_limine:
         _warn_boot_entry_refused(
             "efibootmgr --create exited 0 but no 'Limine' entry is registered, so this "
@@ -1290,7 +1299,7 @@ def _register_limine_efi_entry(
     keep = [
         num
         for num in pre_state["order"]
-        if num not in stale_limine
+        if num not in deleted
         and num != limine_num
         and num in pre_state["entries"]
     ]
