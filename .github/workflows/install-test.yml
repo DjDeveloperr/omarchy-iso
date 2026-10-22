@@ -248,8 +248,27 @@ jobs:
 
       - name: Report times
         if: always()
+        env:
+          VARIANT: ${{ matrix.variant }}
+          VARIANT_ENV: ${{ matrix.env }}
+          OPTIONS: ${{ matrix.options }}
         run: |
-          base=$(ls -d test-runs/*-integration* 2>/dev/null | head -1)
+          # The variant's own install folder, named the way base-test.sh
+          # names it. A job running every scenario also leaves pxe-test.sh's
+          # -bios one, which can sort first and holds no install numbers.
+          firmware=uefi kb=us
+          for setting in $VARIANT_ENV; do
+            case $setting in
+              OMARCHY_INTEGRATION_FIRMWARE=*) firmware=${setting#*=} ;;
+              OMARCHY_INTEGRATION_KB_LAYOUT=*) kb=${setting#*=} ;;
+            esac
+          done
+          for option in $OPTIONS; do [ "$option" != --bios ] || firmware=bios; done
+          suffix=
+          [ "$firmware" != bios ] || suffix+=-bios
+          [ "$VARIANT" = default ] || suffix+="-$VARIANT"
+          [ "$kb" = us ] || suffix+="-kb$kb"
+          base=$(ls -d test-runs/*-integration"$suffix" 2>/dev/null | head -1)
           boot() { head -1 "$1" | sed -E 's/in [^+]*\(firmware\) \+ /in /; s/ *=.*//'; }
           [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
