@@ -753,7 +753,7 @@ drive_configurator() {
   wait_for_screen "installation mode\|recovery possible" 60
   if ocr_screen | grep -qi "installation mode"; then
     capture_console "success-installer-11-install-mode"
-    press ret # "Full disk install" is preselected
+    press ret # a blank disk: "Full disk install" comes first
   fi
 
   wait_for_screen "recovery possible" 60

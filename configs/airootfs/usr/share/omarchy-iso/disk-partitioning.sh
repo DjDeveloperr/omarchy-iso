@@ -137,3 +137,50 @@ rollback_created_parts() {
   partprobe "$disk" 2>/dev/null || true
   created_parts=()
 }
+
+# The disks the installer offers, one per line, in the order the disk screen
+# lists them. gum highlights the first entry, so that is the default a user
+# confirms with Enter: internal disks come first, then removable and USB ones
+# (a stick or a KVM's virtual storage left plugged in, an SD card), each group
+# in lsblk's order. Leaves out the boot medium's disk ($1), disks with no
+# medium, which report size 0 (an empty card reader, a KVM's virtual optical
+# drive), and an eMMC's boot and RPMB areas. An SD card in a PCIe reader
+# reports RM 0 and TRAN mmc, like the eMMC a laptop boots from; only its MMC
+# card type, SD, tells them apart. TRAN is the last column because it is
+# empty for some disks (xvd, hd).
+install_disk_candidates() {
+  local exclude=${1:-} sysfs=${SYSFS_BLOCK:-/sys/block}
+  local name type size removable tran external n=0
+  lsblk -dbpno NAME,TYPE,SIZE,RM,TRAN |
+    while read -r name type size removable tran; do
+      n=$((n + 1))
+      [[ $type == disk && $size -gt 0 && $name != "$exclude" ]] || continue
+      [[ $name =~ ^/dev/(sd|hd|vd|nvme|mmcblk|xv) ]] || continue
+      [[ $name =~ ^/dev/mmcblk[0-9]+(boot[0-9]+|rpmb)$ ]] && continue
+      external=0
+      if [[ $removable == 1 || $tran == usb ]] ||
+        [[ $(cat "$sysfs/${name##*/}/device/type" 2>/dev/null) == SD ]]; then
+        external=1
+      fi
+      printf '%s\t%s\t%s\n' "$external" "$n" "$name"
+    done |
+    sort -k1,1n -k2,2n | cut -f3
+}
+
+# The install modes for the disk screen's choice, the default first. On a disk
+# that already holds partitions ($2 of them) the default is the free-space
+# install, which keeps them; the full-disk install, which erases them, is one
+# key away. $1 is whether the free-space mode is on offer at all (UEFI, a
+# partition table and room for Omarchy).
+install_mode_choices() {
+  local free_space_offered=$1 partitions=${2:-0}
+  local free_space="Free space install (alongside existing data)"
+  if [[ $free_space_offered == true ]] && ((partitions > 0)); then
+    printf '%s\n' "$free_space" "Full disk install"
+  elif [[ $free_space_offered == true ]]; then
+    printf '%s\n' "Full disk install" "$free_space"
+  else
+    printf '%s\n' "Full disk install"
+  fi
+  printf '%s\n' "Choose a different disk"
+}
