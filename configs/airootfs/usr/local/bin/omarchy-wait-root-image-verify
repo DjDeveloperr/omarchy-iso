@@ -121,16 +121,20 @@ await_verdict() {
   UNIT=$1
   local what=$2 load_state state tail msg pct
   local reported=false progress_drawn=false settling=0 unanswered=0
-  local where last_where="" last_move=$SECONDS
+  local where last_where="" last_move=$SECONDS starting=""
   local label="verifying the install medium"
   [[ $UNIT == "$MIRROR_UNIT" ]] && label="verifying the install medium's packages"
   load_state=$(unit_prop LoadState)
   [[ -n $load_state ]] || fail "systemd is not answering about $UNIT; cannot verify $what"
   [[ $load_state == loaded ]] || fail "$UNIT is not on this live system; cannot verify $what"
 
-  # inactive -> never started; `systemctl start` blocks until the oneshot exits.
-  [[ "$(unit_prop ActiveState)" == inactive ]] &&
-    systemctl start "$UNIT" >/dev/null 2>&1
+  # inactive -> never started. `systemctl start` blocks until the oneshot
+  # exits, so it runs in the background: the wait below must watch the hash
+  # for a stall while it does. Until it returns, the job may still be queued.
+  if [[ "$(unit_prop ActiveState)" == inactive ]]; then
+    systemctl start "$UNIT" >/dev/null 2>&1 &
+    starting=$!
+  fi
 
   while :; do
     state=$(systemctl show "$UNIT" -p ActiveState --value 2>/dev/null)
@@ -235,6 +239,11 @@ await_verdict() {
         sleep 0.5
         ;;
       *)
+        # inactive while the start above still waits: its job is queued.
+        if [[ $state == inactive && -n $starting ]] && kill -0 "$starting" 2>/dev/null; then
+          sleep 0.5
+          continue
+        fi
         # inactive after the start above: a condition kept it from running
         # (the stream or its checksum is not where the unit expects them).
         fail "$UNIT did not run ($state); cannot verify $what"
