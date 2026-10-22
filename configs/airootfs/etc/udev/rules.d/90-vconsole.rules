@@ -1,0 +1,5 @@
+# The live system sets up its console itself: .automated_script.sh loads the
+# font and the configurator runs loadkeys for the layout the user picks.
+# systemd's rule restarts systemd-vconsole-setup whenever a console binds,
+# which on the live ISO is fbcon taking over tty1 as the installer's getty
+# starts; its loadkeys then races agetty's hangup and fails with EIO.
