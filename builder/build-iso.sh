@@ -197,6 +197,10 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # Drops the x86-only microcode/memdisk hooks and adds the Tegra/MediaTek
   # I2C-HID keyboard modules.
   configure_archiso_aarch64_mkinitcpio "$build_cache_dir/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+  # The initramfs waits for the live medium only on x86_64 (configs/airootfs/
+  # etc/initcpio/hooks/udev); the aarch64 boards keep the full settle, which
+  # the Qualcomm firmware staging before media discovery was proven with.
+  rm -f "$build_cache_dir/airootfs/etc/initcpio/hooks/udev"
   boot_splash_kernel_options="quiet splash "
   cp "/builder/${OMARCHY_KERNEL}.preset" "$build_cache_dir/airootfs/etc/mkinitcpio.d/${OMARCHY_KERNEL}.preset"
   # The N1x firmware's SPCR serial console would take the console from the
