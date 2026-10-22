@@ -1029,8 +1029,8 @@ echo "[timing] mkarchiso end $(date +%s)"
 # 91 MiB one boots in 512 MB. 128 MiB leaves headroom over today's size and
 # none for that class of regression.
 live_initramfs_limit=$((128 * 1024 * 1024))
-for live_initramfs in "$build_cache_dir/work/iso/${iso_subdir%/*}/boot/x86_64"/initramfs-*.img; do
-  [[ -f $live_initramfs ]] || { echo "ERROR: no live initramfs under work/iso/${iso_subdir%/*}/boot/x86_64" >&2; exit 1; }
+for live_initramfs in "$build_cache_dir/work/iso/${iso_subdir%/*}/boot/$OMARCHY_ARCH"/initramfs-*.img; do
+  [[ -f $live_initramfs ]] || { echo "ERROR: no live initramfs under work/iso/${iso_subdir%/*}/boot/$OMARCHY_ARCH" >&2; exit 1; }
   live_initramfs_bytes=$(stat -c %s "$live_initramfs")
   echo "live initramfs $(basename "$live_initramfs"): $live_initramfs_bytes bytes"
   if (( live_initramfs_bytes > live_initramfs_limit )); then

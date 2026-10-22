@@ -67,6 +67,21 @@ done
 grep -Fq 'sed -i "s|^Server = https://pkgs' "$ROOT/builder/build-iso.sh" && fail "an aarch64 build still rewrites its [omarchy] server"
 grep -Fq 'repo-add -q "$bundle_index/platform.db.tar.gz"' "$ROOT/builder/build-iso.sh" || fail "bundle is not indexed as the [platform] repo"
 grep -Fq 'arch="${OMARCHY_ARCH:-x86_64}"' "$ROOT/configs/profiledef.sh" || fail "profiledef ignores OMARCHY_ARCH"
+# The live initramfs size gate looks where mkarchiso puts it for the build's
+# architecture: <install_dir>/boot/<arch>. The builder's own gate, run on a
+# small and an oversized initramfs for each architecture.
+initramfs_gate=$(sed -n '/^live_initramfs_limit=/,/^done$/p' "$ROOT/builder/build-iso.sh")
+[[ -n $initramfs_gate ]] || fail "the builder no longer gates the live initramfs size"
+for platform in x86_64 aarch64; do
+  mkdir -p "$fixture/gate-$platform/work/iso/arch/boot/$platform"
+  live_img="$fixture/gate-$platform/work/iso/arch/boot/$platform/initramfs-linux-omarchy.img"
+  truncate -s 96M "$live_img"
+  (build_cache_dir="$fixture/gate-$platform" iso_subdir=arch/$platform OMARCHY_ARCH=$platform; eval "$initramfs_gate") >/dev/null 2>&1 \
+    || fail "the live initramfs size gate does not find the $platform initramfs"
+  truncate -s 129M "$live_img"
+  (build_cache_dir="$fixture/gate-$platform" iso_subdir=arch/$platform OMARCHY_ARCH=$platform; eval "$initramfs_gate") >/dev/null 2>&1 \
+    && fail "a 129 MiB $platform live initramfs passes the 128 MiB gate"
+done
 
 # --- GRUB templating -----------------------------------------------------------
 for cfg in grub.cfg loopback.cfg; do
