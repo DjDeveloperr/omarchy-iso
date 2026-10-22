@@ -3,7 +3,7 @@
 ONLY this module imports from archinstall. Everything else uses these helpers.
 If archinstall's API churns, the blast radius is contained here.
 
-Tested against archinstall 4.4 (Python 3.14).
+Tested against archinstall 4.4 and 4.5 (Python 3.14).
 
 The canonical call sequence (mirrored from archinstall.scripts.guided.py) is:
 
@@ -321,7 +321,7 @@ def install_base_delta(
     reduced to the base packages the image does not carry (the kernel and the
     CPU microcode).
 
-    Mirrors archinstall 4.4's minimal_installation step for step so the target
+    Mirrors archinstall 4.4's and 4.5's minimal_installation step for step so the target
     ends up as that call would leave it: filesystem/encryption preparation
     (which also decides the mkinitcpio hooks), microcode detection, pacman.conf
     handling, vconsole, hostname, locale, and the helper flags later Installer
@@ -339,7 +339,11 @@ def install_base_delta(
             for part in mod.partitions:
                 if part.fs_type is None:
                     continue
-                installer._prepare_fs_type(part.fs_type, part.mountpoint)
+                # 4.5 dropped the mountpoint, which 4.4 took and never used.
+                if _method_accepts(installer._prepare_fs_type, "mountpoint"):
+                    installer._prepare_fs_type(part.fs_type, part.mountpoint)
+                else:
+                    installer._prepare_fs_type(part.fs_type)
                 if part in installer._disk_encryption.partitions:
                     installer._prepare_encrypt()
 
@@ -388,6 +392,9 @@ def install_base_delta(
     with _time_step("DELTA.post_base_install"):
         for function in installer.post_base_install:
             function(installer)
+        # 4.5: services queued before the base existed (copy_iso_network_config).
+        if services := getattr(installer, "_post_base_install_services", None):
+            installer.enable_service(services)
 
 
 def setup_zram_swap(installer: Installer) -> None:
