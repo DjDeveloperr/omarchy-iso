@@ -107,3 +107,33 @@ slept=$(<"$work/slept")
 ((status == 1)) || fail "a refused passphrase did not time out (status $status): $(tail -n3 "$work/out")"
 ((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s at the passphrase prompt"
 echo "ok - typing at the passphrase prompt counts against the install timeout"
+
+# -------------------------------------------- typing under the guest's layout
+#
+# type_text sends US key positions, which the guest reads through
+# KB_LAYOUT's keymap. A layout that moves the keys the harness types is
+# refused before a VM starts, and on uk the two characters that move are
+# refused instead of arriving as other ones.
+
+take kb_layout_untypeable
+for layout in us uk; do
+  run kb_layout_untypeable "$layout"
+  ((status == 0)) || fail "the $layout layout was refused: $(cat "$work/out")"
+done
+run kb_layout_untypeable de
+((status != 0)) || fail "the de layout was accepted, where the passphrase omarchy types as omarchz"
+grep -q "OMARCHY_INTEGRATION_KB_LAYOUT=de" "$work/out" || fail "the refusal does not name the setting: $(cat "$work/out")"
+echo "ok - a layout the harness cannot type is refused"
+
+take type_text
+KB_LAYOUT=uk KB_UNTYPEABLE=$(kb_layout_untypeable uk)
+: >"$work/pressed"
+run type_text "omarchy"
+((status == 0)) || fail "the passphrase could not be typed under uk: $(cat "$work/out")"
+[[ $(paste -sd' ' "$work/pressed") == "o m a r c h y" ]] || fail "the passphrase was typed as $(paste -sd' ' "$work/pressed")"
+for text in "test@omarchy.org" "cd ~"; do
+  : >"$work/pressed"
+  run type_text "$text"
+  ((status != 0)) || fail "$text was typed under uk, where it lands as other characters"
+done
+echo "ok - type_text refuses the characters that sit on other keys under uk"
