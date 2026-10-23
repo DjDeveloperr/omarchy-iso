@@ -77,6 +77,18 @@ fi
 
 # Packages installed into the Arch container used to build the ISO.
 pacman-key --init
+# The [core] server of an online configuration: the build channel's Omarchy
+# mirror, which the build container installs its own tools from.
+channel_core_server() {
+  local server
+  server=$(awk '/^\[core\]$/ { getline server; print server; exit }' "$1")
+  if [[ $server != "Server = https://"*"mirror.omarchy.org/"* ]]; then
+    echo "ERROR: no Omarchy mirror for [core] in $1" >&2
+    return 1
+  fi
+  printf '%s\n' "$server"
+}
+
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   channel_pacman_conf=$online_pacman_conf
   online_pacman_conf=/tmp/pacman-online-aarch64.conf
@@ -106,11 +118,7 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
 
   # The container image arrives pointed at Arch Linux ARM's own mirrors. Its
   # packages come from the same place the ISO's do: Omarchy's mirror of them.
-  awk '/^\[core\]$/ { getline server; print server; exit }' "$online_pacman_conf" >/etc/pacman.d/mirrorlist
-  grep -q '^Server = https://[a-z-]*mirror\.omarchy\.org/' /etc/pacman.d/mirrorlist || {
-    echo "ERROR: no Omarchy mirror for [core] in $online_pacman_conf" >&2
-    exit 1
-  }
+  channel_core_server "$online_pacman_conf" >/etc/pacman.d/mirrorlist || exit 1
   pacman --noconfirm -Sy archlinuxarm-keyring
   pacman-key --populate archlinuxarm
   # Arch Linux ARM does not publish archiso. Install its runtime dependencies
@@ -126,6 +134,11 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   patch --batch --forward --fuzz=0 "$mkarchiso_command" </builder/archiso-v87-aarch64-boot-efi.patch
   chmod 0755 "$mkarchiso_command"
 else
+  # The container's own tools come from the channel's Omarchy mirror too; the
+  # image's mirrors stay after it as the fallback the online configuration
+  # reaches through its Include.
+  core_server=$(channel_core_server "$online_pacman_conf") || exit 1
+  sed -i "1i $core_server" /etc/pacman.d/mirrorlist
   pacman --noconfirm -Sy archlinux-keyring
   # Full upgrade, not just -Sy: docker never re-pulls :latest once it's cached,
   # so this container can be months behind the mirror it installs from. A plain
