@@ -2,7 +2,7 @@
 
 The fake keeps NVRAM in a JSON file and behaves like efibootmgr 18: a listing
 (plain or --verbose, as the orchestrator asks) prints each entry's device path
-after its label, --create takes the lowest free
+after its label and a "*" on active ones, --create takes the lowest free
 number and puts it first in BootOrder, --delete-bootnum frees the number again,
 --bootnext refuses a number that has no entry. Every call is logged, and the
 fake can stand in for firmware that refuses a create, has no room left in
@@ -11,7 +11,8 @@ A fake lsblk answers the ESP's partition GUID.
 
 The case that matters: a free-space install next to an existing Omarchy must
 not delete the other install's "Limine" entry, nor take the first "Limine"
-entry in the list as its own.
+entry in the list as its own. And a reinstall onto the same ESP keeps the
+entry that already boots it: nothing is deleted to make way for a new one.
 """
 
 import json
@@ -54,9 +55,12 @@ if args in ([], ["--verbose"], ["-v"]):
         print("BootNext: " + nvram["next"])
     print("BootCurrent: 0001")
     print("BootOrder: " + ",".join(nvram["order"]))
-    for num, (label, dp) in sorted(nvram["entries"].items()):
+    for num, (label, dp, *flags) in sorted(nvram["entries"].items()):
+        # The "*" marks an active option; an entry listed as
+        # [label, path, "inactive"] has it cleared.
+        star = " " if "inactive" in flags else "*"
         # FAKE_NO_PATHS: an efibootmgr that lists labels only.
-        print(f"Boot{num}* {label}" if os.environ.get("FAKE_NO_PATHS") else f"Boot{num}* {label}\t{dp}")
+        print(f"Boot{num}{star} {label}" if os.environ.get("FAKE_NO_PATHS") else f"Boot{num}{star} {label}\t{dp}")
     sys.exit(0)
 if "--create" in args and os.environ.get("FAKE_REFUSE_CREATE"):
     print("Could not prepare Boot variable: Invalid argument", file=sys.stderr)
@@ -172,23 +176,38 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         ours = next(num for num, dp in limine.items() if OURS in dp)
         self.assertEqual(nvram["order"], [ours, "0004", "0000"])
 
-    def test_this_esps_old_entry_is_replaced(self):
+    def test_a_reinstall_onto_the_same_esp_reuses_its_entry(self):
+        # 0003 already starts this loader from this ESP, which is exactly the
+        # entry a create would add. It is reused: nothing is created or
+        # deleted, and BootOrder and BootNext point at it.
+        old = {
+            "0000": self.entry("Windows Boot Manager", WINDOWS),
+            "0003": self.entry("Limine", OURS, part=3),
+            "0004": self.entry("Limine", OTHER),
+        }
+        self.nvram_with(old, ["0000", "0004", "0003"])
+        nvram = self.register()
+        self.assertEqual(nvram["entries"], old)
+        self.assertEqual(self.writes(), ["--bootorder", "--bootnext"])
+        self.assertEqual(nvram["order"], ["0003", "0000", "0004"])
+        self.assertEqual(nvram.get("next"), "0003", nvram)
+
+    def test_duplicates_of_the_reused_entry_go(self):
+        # Two identical entries, left by an efibootmgr that printed no paths:
+        # the first is reused and the other deleted, never the reused one.
         self.nvram_with(
             {
-                "0000": self.entry("Windows Boot Manager", WINDOWS),
+                "0001": self.entry("Limine", OURS, part=3),
                 "0003": self.entry("Limine", OURS, part=3),
                 "0004": self.entry("Limine", OTHER),
             },
-            ["0000", "0004", "0003"],
+            ["0003", "0004", "0001"],
         )
         nvram = self.register()
-        limine = self.limine_guids(nvram)
-        self.assertEqual(len([dp for dp in limine.values() if OURS in dp]), 1, nvram)
-        self.assertIn("0004", limine)
-        ours = next(num for num, dp in limine.items() if OURS in dp)
-        self.assertEqual(nvram["order"], [ours, "0000", "0004"])
-        # The old entry goes only once its replacement exists.
-        self.assertEqual(self.writes()[:2], ["--create", "--delete-bootnum"])
+        self.assertEqual(sorted(nvram["entries"]), ["0001", "0004"])
+        self.assertNotIn("--create", self.writes())
+        self.assertEqual(nvram["order"], ["0001", "0004"])
+        self.assertEqual(nvram.get("next"), "0001", nvram)
 
     def test_the_created_entry_is_ours_even_when_listed_after_another(self):
         # The fake reuses the lowest free number: with 0000 taken by another
@@ -220,6 +239,19 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertEqual(nvram["order"], [ours, "0004"])
         self.assertTrue(any("BootNext" in message for message in errors), errors)
 
+    def test_an_inactive_identical_entry_is_not_reused(self):
+        # Someone switched the old entry off in the firmware; BootOrder skips
+        # it. A create writes an active one, so 0003 is not identical to it:
+        # a new entry is created and booted next, and 0003 is left alone.
+        inactive = self.entry("Limine", OURS, part=3) + ["inactive"]
+        self.nvram_with({"0003": inactive, "0004": self.entry("Limine", OTHER)}, ["0004", "0003"])
+        nvram = self.register()
+        self.assertEqual(nvram["entries"]["0000"], self.entry("Limine", OURS, part=3))
+        self.assertEqual(nvram["entries"]["0003"], inactive)
+        self.assertNotIn("--delete-bootnum", self.writes())
+        self.assertEqual(nvram["order"], ["0000", "0004", "0003"])
+        self.assertEqual(nvram.get("next"), "0000", nvram)
+
     def test_a_label_only_listing_deletes_nothing(self):
         # Without device paths no entry can be shown to be this ESP's.
         self.nvram_with({"0004": self.entry("Limine", OTHER), "0003": self.entry("Limine", OURS, part=3)}, ["0004", "0003"])
@@ -229,22 +261,30 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertIn("0003", nvram["entries"])
 
     def test_a_refused_delete_does_not_stop_the_install(self):
-        self.nvram_with({"0003": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)}, ["0003", "0004"])
+        # The duplicate 0003 refuses to go. The reused 0001 boots first and
+        # the duplicate is left behind it.
+        self.nvram_with(
+            {
+                "0001": self.entry("Limine", OURS, part=3),
+                "0003": self.entry("Limine", OURS, part=3),
+                "0004": self.entry("Limine", OTHER),
+            },
+            ["0003", "0004", "0001"],
+        )
         with mock.patch.dict(os.environ, {"FAKE_REFUSE_DELETE": "1"}), \
                 mock.patch.object(phases_impl, "error", lambda _message: None):
             nvram = self.register()
-        # The old entry could not be deleted, so the new one took the lowest
-        # free number; it boots first and the old one is left behind it.
-        self.assertEqual(nvram["entries"]["0000"], self.entry("Limine", OURS, part=3))
-        self.assertIn("0003", nvram["entries"])
-        self.assertEqual(nvram["order"][0], "0000")
+        self.assertEqual(sorted(nvram["entries"]), ["0001", "0003", "0004"])
+        self.assertEqual(nvram["order"], ["0001", "0003", "0004"])
+        self.assertEqual(nvram.get("next"), "0001", nvram)
 
     def test_other_loaders_on_this_esp_survive(self):
-        # Only an entry identical to the one created is replaced: same label,
-        # this ESP and this loader. A backup loader on the same ESP, or an
-        # entry someone labelled differently, is not ours to delete. The old
-        # entry still counts when the listing prints its path in upper case,
-        # and a BootOrder number with no entry behind it is dropped.
+        # Only an entry identical to the one a create would add is reused:
+        # same label, this ESP and this loader. A backup loader on the same
+        # ESP, or an entry someone labelled differently, is neither reused
+        # nor deleted. The identical entry still counts when the listing
+        # prints its path in upper case, and a BootOrder number with no entry
+        # behind it is dropped.
         backup = self.entry("Limine", OURS, part=3, loader="\\EFI\\backup\\limine.efi")
         relabelled = self.entry("Limine backup", OURS, part=3)
         self.nvram_with(
@@ -256,15 +296,18 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
             ["0003", "0005", "0006", "FFFF"],
         )
         nvram = self.register()
-        self.assertNotIn("0003", nvram["entries"])
+        self.assertNotIn("--create", self.writes())
+        self.assertNotIn("--delete-bootnum", self.writes())
         self.assertEqual(nvram["entries"]["0005"], backup)
         self.assertEqual(nvram["entries"]["0006"], relabelled)
-        self.assertEqual(nvram["order"], ["0000", "0005", "0006"])
+        self.assertEqual(nvram["order"], ["0003", "0005", "0006"])
+        self.assertEqual(nvram.get("next"), "0003", nvram)
 
-    def test_an_old_entry_that_cannot_be_deleted_is_not_taken_for_the_new_one(self):
-        # 0000 is taken, the old 0001 refuses to go, the new entry lands on
-        # 0002. 0001 is still the old entry, so BootNext and the front of
-        # BootOrder go to 0002 and 0001 stays behind it.
+    def test_an_old_entry_is_not_taken_for_the_new_one(self):
+        # A label-only listing cannot show 0001 to be identical, so a new
+        # entry is created; 0000 is taken and it lands on 0002. 0001 was
+        # there before, so BootNext and the front of BootOrder go to 0002
+        # and 0001 stays behind it.
         self.nvram_with(
             {
                 "0000": self.entry("Windows Boot Manager", WINDOWS, loader="\\EFI\\Microsoft\\Boot\\bootmgfw.efi"),
@@ -272,8 +315,7 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
             },
             ["0001", "0000"],
         )
-        with mock.patch.dict(os.environ, {"FAKE_REFUSE_DELETE": "1"}), \
-                mock.patch.object(phases_impl, "error", lambda _message: None):
+        with mock.patch.dict(os.environ, {"FAKE_NO_PATHS": "1"}):
             nvram = self.register()
         self.assertEqual(nvram["entries"]["0002"], self.entry("Limine", OURS, part=3))
         self.assertEqual(nvram.get("next"), "0002", nvram)
@@ -300,24 +342,24 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertEqual(nvram, {"entries": {"0004": self.entry("Limine", OTHER)}, "order": ["0004"]})
         self.assertEqual(len(warnings), 1)
 
-    def test_a_refused_create_keeps_this_esps_old_entry(self):
-        # The old entry is this install's only boot route until the new one
-        # exists; a protected target may have no removable loader to fall
-        # back on.
+    def test_firmware_that_refuses_creates_keeps_this_esps_entry(self):
+        # The identical entry is reused, so no create is sent for the
+        # firmware to refuse and the entry stays this install's boot route;
+        # a protected target may have no removable loader to fall back on.
         old = {"0003": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)}
         self.nvram_with(old, ["0003", "0004"])
         warnings = []
         with mock.patch.dict(os.environ, {"FAKE_REFUSE_CREATE": "1"}), \
                 mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
             nvram = self.register()
-        self.assertEqual(nvram, {"entries": old, "order": ["0003", "0004"]})
-        self.assertEqual(self.writes(), ["--create"])
-        self.assertEqual(len(warnings), 1)
+        self.assertEqual(nvram, {"entries": old, "order": ["0003", "0004"], "next": "0003"})
+        self.assertEqual(self.writes(), ["--bootorder", "--bootnext"])
+        self.assertEqual(warnings, [])
 
-    def test_an_entry_the_firmware_reuses_is_left_in_place(self):
-        # Firmware that answers a create of an existing option with that
-        # option adds no new number. The old entry is the new one then: it
-        # stays, and BootNext and BootOrder point at it.
+    def test_an_entry_the_firmware_answers_a_create_with_is_ours(self):
+        # Firmware that keeps one option per device path and loader answers a
+        # create of an existing option with that option, adding no number.
+        # When the earlier listing did not show it, it is the new entry.
         self.nvram_with(
             {"0000": self.entry("Windows Boot Manager", WINDOWS), "0003": self.entry("Limine", OURS, part=3)},
             ["0000", "0003"],
@@ -325,37 +367,52 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         warnings = []
         with mock.patch.dict(os.environ, {"FAKE_REUSE": "1"}), \
                 mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
-            nvram = self.register()
-        self.assertEqual(nvram["entries"]["0003"], self.entry("Limine", OURS, part=3))
+            phases_impl._register_limine_efi_entry(
+                Path("/dev/nvme1n1"), 3, LOADER,
+                pre_state={"entries": {"0000": "Windows Boot Manager"}, "order": ["0000"]},
+            )
+        nvram = json.loads(self.nvram.read_text())
+        self.assertEqual(sorted(nvram["entries"]), ["0000", "0003"])
         self.assertNotIn("--delete-bootnum", self.writes())
         self.assertEqual(nvram["order"], ["0003", "0000"])
         self.assertEqual(nvram.get("next"), "0003", nvram)
         self.assertEqual(warnings, [])
 
-    def test_a_full_nvram_frees_the_old_entrys_slot_and_retries_once(self):
-        # No room for a second option: the old identical entry makes way, and
-        # the new one, created on the number it freed, is found as ours.
-        self.nvram_with(
-            {"0000": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)},
-            ["0000", "0004"],
-        )
-        with mock.patch.dict(os.environ, {"FAKE_SLOTS": "2"}):
-            nvram = self.register()
-        self.assertEqual(self.writes()[:3], ["--create", "--delete-bootnum", "--create"])
-        self.assertEqual(nvram["entries"]["0000"], self.entry("Limine", OURS, part=3))
-        self.assertEqual(nvram["entries"]["0004"], self.entry("Limine", OTHER))
-        self.assertEqual(nvram["order"], ["0000", "0004"])
-        self.assertEqual(nvram.get("next"), "0000", nvram)
+    def test_a_full_nvram_keeps_the_identical_entry(self):
+        # No room for another option, even once one is deleted (one slot).
+        # The identical entry is reused: nothing is created or deleted, so
+        # the entry that boots this install cannot be lost to a create that
+        # fails after it.
+        old = {"0000": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)}
+        for slots in ("2", "1"):
+            with self.subTest(slots=slots):
+                self.nvram_with(old, ["0004", "0000"])
+                Path(str(self.nvram) + ".log").unlink(missing_ok=True)
+                warnings = []
+                with mock.patch.dict(os.environ, {"FAKE_SLOTS": slots}), \
+                        mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+                    nvram = self.register()
+                self.assertEqual(nvram["entries"], old)
+                self.assertEqual(self.writes(), ["--bootorder", "--bootnext"])
+                self.assertEqual(nvram["order"], ["0000", "0004"])
+                self.assertEqual(nvram.get("next"), "0000", nvram)
+                self.assertEqual(warnings, [])
 
-    def test_a_full_nvram_without_an_old_entry_of_ours_deletes_nothing(self):
-        # Another install's entry is not ours to make room with.
-        old = {"0000": self.entry("Windows Boot Manager", WINDOWS), "0004": self.entry("Limine", OTHER)}
-        self.nvram_with(old, ["0000", "0004"])
+    def test_a_full_nvram_without_an_identical_entry_deletes_nothing(self):
+        # Neither another install's entry nor a backup loader on this ESP is
+        # ours to make room with. The create is refused, the warning says
+        # why, and the install goes on to the removable loader.
+        old = {
+            "0000": self.entry("Windows Boot Manager", WINDOWS),
+            "0004": self.entry("Limine", OTHER),
+            "0005": self.entry("Limine", OURS, part=3, loader="\\EFI\\backup\\limine.efi"),
+        }
+        self.nvram_with(old, ["0000", "0004", "0005"])
         warnings = []
-        with mock.patch.dict(os.environ, {"FAKE_SLOTS": "2"}), \
+        with mock.patch.dict(os.environ, {"FAKE_SLOTS": "3"}), \
                 mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
             nvram = self.register()
-        self.assertEqual(nvram, {"entries": old, "order": ["0000", "0004"]})
+        self.assertEqual(nvram, {"entries": old, "order": ["0000", "0004", "0005"]})
         self.assertEqual(self.writes(), ["--create"])
         self.assertEqual(len(warnings), 1)
         self.assertIn("No space left on device", warnings[0])
