@@ -1753,8 +1753,8 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
         ("/var/cache/omarchy/mirror/offline", "/var/cache/omarchy/mirror/offline"),
     ]
     # build-iso.sh bundles Node only for a runtime whose setup still unpacks it.
-    if Path("/opt/packages").is_dir():
-        bind_mounts.append(("/opt/packages", "/opt/packages"))
+    if NODE_PACKAGES_DIR.is_dir():
+        bind_mounts.append((str(NODE_PACKAGES_DIR), str(NODE_PACKAGES_DIR)))
     ctx.state.setdefault("bind_mounts", [])
     mounted = set(ctx.state["bind_mounts"])
     for src, dst in bind_mounts:
@@ -1899,10 +1899,14 @@ def run_system_finalizer(ctx: InstallContext) -> None:
 # stage_provisioning_state: produce the on-disk "provisioning state" the runtime's first-boot
 # setup (omarchy-provision-owner) and factory reset (omarchy-system-factory-reset) consume.
 #
-# Deferred-provisioning installs arm the first-boot setup service and, on
-# encrypted targets, stage the throwaway LUKS passphrase: the keyfile embedded
-# in the initramfs auto-unlocks boot during the provisioning window, and
-# first-boot setup re-keys the volume to the owner's password and removes it.
+# When the ISO bundles Node (a runtime from before Omarchy installed Node
+# lazily), every install keeps it in /var/lib/omarchy/provisioning/packages:
+# that runtime's first-boot setup and factory reset finalize a user offline
+# from there, after /opt/packages is gone. Deferred-provisioning installs
+# additionally arm the first-boot setup service and, on encrypted targets,
+# stage the throwaway LUKS passphrase: the keyfile embedded in the initramfs
+# auto-unlocks boot during the provisioning window, and first-boot setup
+# re-keys the volume to the owner's password and removes it.
 #
 # Runs before finalize_limine_boot so the cryptkey cmdline drop-in and the
 # keyfile land in the final UKI build.
@@ -1910,13 +1914,17 @@ def run_system_finalizer(ctx: InstallContext) -> None:
 
 PROVISION_STATE_DIR = "var/lib/omarchy/provisioning"
 PROVISION_KEYFILE = "etc/omarchy/provisioning.key"
+NODE_PACKAGES_DIR = Path("/opt/packages")
 
 
 def stage_provisioning_state(ctx: InstallContext) -> None:
-    # The only secret inside (luks-key) is itself 0600 root.
+    # World-readable: first-boot finalization reads the Node tarball as the
+    # new user. The only secret inside (luks-key) is itself 0600 root.
     provisioning_dir = ctx.target / PROVISION_STATE_DIR
     provisioning_dir.mkdir(parents=True, exist_ok=True)
     provisioning_dir.chmod(0o755)
+
+    _stage_node_tarball(provisioning_dir)
 
     if not ctx.defer_provisioning:
         return
@@ -1944,6 +1952,21 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
 
     if _provision_install_encrypted(ctx):
         _stage_provisioning_luks_unlock(ctx, provisioning_dir)
+
+
+# build-iso.sh bundles the build for the CPU the ISO runs on, and only for a
+# runtime whose setup unpacks it; with none bundled there is nothing to keep.
+def _stage_node_tarball(provisioning_dir) -> None:
+    tarballs = sorted(NODE_PACKAGES_DIR.glob("node-v*.tar.gz"))
+    if not tarballs:
+        return
+
+    packages_dir = provisioning_dir / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    target_tarball = packages_dir / tarballs[0].name
+    if not target_tarball.exists():
+        info("› stashing Node tarball for offline first-boot setup")
+        shutil.copy2(tarballs[0], target_tarball)
 
 
 def _provision_install_encrypted(ctx: InstallContext) -> bool:
