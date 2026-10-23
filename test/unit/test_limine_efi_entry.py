@@ -4,7 +4,9 @@ The fake keeps NVRAM in a JSON file and behaves like efibootmgr 18: a listing
 (plain or --verbose, as the orchestrator asks) prints each entry's device path
 after its label, --create takes the lowest free
 number and puts it first in BootOrder, --delete-bootnum frees the number again,
---bootnext refuses a number that has no entry.
+--bootnext refuses a number that has no entry. Every call is logged, and the
+fake can stand in for firmware that refuses a create, has no room left in
+NVRAM, or answers a create of an existing option with that option.
 A fake lsblk answers the ESP's partition GUID.
 
 The case that matters: a free-space install next to an existing Omarchy must
@@ -38,8 +40,15 @@ LOADER = "\\EFI\\limine\\limine_x64.efi"
 FAKE_EFIBOOTMGR = r'''#!/usr/bin/env python3
 import json, os, sys
 path = os.environ["FAKE_NVRAM"]
-nvram = json.load(open(path))
 args = sys.argv[1:]
+with open(path + ".log", "a") as log:
+    log.write(json.dumps(args) + "\n")
+# FAKE_NO_EFIVARS: a kernel without EFI runtime services (efi=noruntime, or
+# firmware that faulted and had them turned off), as efibootmgr 18 reports it.
+if os.environ.get("FAKE_NO_EFIVARS"):
+    print("EFI variables are not supported on this system.", file=sys.stderr)
+    sys.exit(2)
+nvram = json.load(open(path))
 if args in ([], ["--verbose"], ["-v"]):
     if "next" in nvram:
         print("BootNext: " + nvram["next"])
@@ -59,9 +68,17 @@ if "--create" in args:
     get = lambda flag: args[args.index(flag) + 1]
     guids = json.loads(os.environ["FAKE_GUIDS"])
     guid = guids[f'{get("--disk")}:{get("--part")}']
-    num = next(f"{n:04X}" for n in range(0x10000) if f"{n:04X}" not in nvram["entries"])
-    nvram["entries"][num] = [get("--label"), f'HD({get("--part")},GPT,{guid},0x800,0x400000)/{get("--loader")}']
-    nvram["order"].insert(0, num)
+    created = [get("--label"), f'HD({get("--part")},GPT,{guid},0x800,0x400000)/{get("--loader")}']
+    # FAKE_SLOTS: an NVRAM store with room for that many boot options.
+    if len(nvram["entries"]) >= int(os.environ.get("FAKE_SLOTS", "65536")):
+        print("Could not prepare Boot variable: No space left on device", file=sys.stderr)
+        sys.exit(28)
+    # FAKE_REUSE: firmware that keeps one option per device path and loader
+    # answers a create of an existing one with that one, writing nothing.
+    if not (os.environ.get("FAKE_REUSE") and created in nvram["entries"].values()):
+        num = next(f"{n:04X}" for n in range(0x10000) if f"{n:04X}" not in nvram["entries"])
+        nvram["entries"][num] = created
+        nvram["order"].insert(0, num)
 elif "--delete-bootnum" in args:
     num = args[args.index("--bootnum") + 1]
     del nvram["entries"][num]
@@ -128,6 +145,16 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         phases_impl._register_limine_efi_entry(Path("/dev/nvme1n1"), 3, LOADER)
         return json.loads(self.nvram.read_text())
 
+    def calls(self):
+        log = Path(str(self.nvram) + ".log")
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def writes(self):
+        """The efibootmgr calls that change NVRAM, by their action flag."""
+        actions = ("--create", "--delete-bootnum", "--bootorder", "--bootnext")
+        return [next(flag for flag in actions if flag in args) for args in self.calls()
+                if any(flag in args for flag in actions)]
+
     def limine_guids(self, nvram):
         return {num: dp for num, (label, dp) in nvram["entries"].items() if label == "Limine"}
 
@@ -160,6 +187,8 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertIn("0004", limine)
         ours = next(num for num, dp in limine.items() if OURS in dp)
         self.assertEqual(nvram["order"], [ours, "0000", "0004"])
+        # The old entry goes only once its replacement exists.
+        self.assertEqual(self.writes()[:2], ["--create", "--delete-bootnum"])
 
     def test_the_created_entry_is_ours_even_when_listed_after_another(self):
         # The fake reuses the lowest free number: with 0000 taken by another
@@ -271,11 +300,65 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertEqual(nvram, {"entries": {"0004": self.entry("Limine", OTHER)}, "order": ["0004"]})
         self.assertEqual(len(warnings), 1)
 
-    def test_created_entry_reusing_a_deleted_number_is_found(self):
-        self.nvram_with({"0000": self.entry("Limine", OURS, part=3)}, ["0000"])
-        nvram = self.register()
-        self.assertEqual(nvram["order"], ["0000"])
-        self.assertIn(OURS, nvram["entries"]["0000"][1])
+    def test_a_refused_create_keeps_this_esps_old_entry(self):
+        # The old entry is this install's only boot route until the new one
+        # exists; a protected target may have no removable loader to fall
+        # back on.
+        old = {"0003": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)}
+        self.nvram_with(old, ["0003", "0004"])
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_REFUSE_CREATE": "1"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            nvram = self.register()
+        self.assertEqual(nvram, {"entries": old, "order": ["0003", "0004"]})
+        self.assertEqual(self.writes(), ["--create"])
+        self.assertEqual(len(warnings), 1)
+
+    def test_an_entry_the_firmware_reuses_is_left_in_place(self):
+        # Firmware that answers a create of an existing option with that
+        # option adds no new number. The old entry is the new one then: it
+        # stays, and BootNext and BootOrder point at it.
+        self.nvram_with(
+            {"0000": self.entry("Windows Boot Manager", WINDOWS), "0003": self.entry("Limine", OURS, part=3)},
+            ["0000", "0003"],
+        )
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_REUSE": "1"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            nvram = self.register()
+        self.assertEqual(nvram["entries"]["0003"], self.entry("Limine", OURS, part=3))
+        self.assertNotIn("--delete-bootnum", self.writes())
+        self.assertEqual(nvram["order"], ["0003", "0000"])
+        self.assertEqual(nvram.get("next"), "0003", nvram)
+        self.assertEqual(warnings, [])
+
+    def test_a_full_nvram_frees_the_old_entrys_slot_and_retries_once(self):
+        # No room for a second option: the old identical entry makes way, and
+        # the new one, created on the number it freed, is found as ours.
+        self.nvram_with(
+            {"0000": self.entry("Limine", OURS, part=3), "0004": self.entry("Limine", OTHER)},
+            ["0000", "0004"],
+        )
+        with mock.patch.dict(os.environ, {"FAKE_SLOTS": "2"}):
+            nvram = self.register()
+        self.assertEqual(self.writes()[:3], ["--create", "--delete-bootnum", "--create"])
+        self.assertEqual(nvram["entries"]["0000"], self.entry("Limine", OURS, part=3))
+        self.assertEqual(nvram["entries"]["0004"], self.entry("Limine", OTHER))
+        self.assertEqual(nvram["order"], ["0000", "0004"])
+        self.assertEqual(nvram.get("next"), "0000", nvram)
+
+    def test_a_full_nvram_without_an_old_entry_of_ours_deletes_nothing(self):
+        # Another install's entry is not ours to make room with.
+        old = {"0000": self.entry("Windows Boot Manager", WINDOWS), "0004": self.entry("Limine", OTHER)}
+        self.nvram_with(old, ["0000", "0004"])
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_SLOTS": "2"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            nvram = self.register()
+        self.assertEqual(nvram, {"entries": old, "order": ["0000", "0004"]})
+        self.assertEqual(self.writes(), ["--create"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("No space left on device", warnings[0])
 
 
     def test_boot_check_does_not_count_another_installs_entry(self):
@@ -286,9 +369,55 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
         with mock.patch.object(phases_impl, "error", lambda _message: None):
             with self.assertRaises(RuntimeError):
-                phases_impl._validate_uefi_boot_routes(esp)
+                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
             self.nvram_with({"0004": self.entry("Limine", OTHER), "0005": self.entry("Limine", OURS, part=3)}, ["0005", "0004"])
-            phases_impl._validate_uefi_boot_routes(esp)
+            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+
+    def test_an_unreadable_variable_store_skips_registration(self):
+        # Every NVRAM write would fail the same way, so none is tried, and
+        # the install goes on to write the removable loader.
+        self.nvram_with({}, [])
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            self.register()
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("EFI variables are not supported", warnings[0])
+
+    def test_an_unreadable_variable_store_does_not_stop_a_free_space_install(self):
+        # The Windows entry check compares a listing before and after; with
+        # no listing to compare, it is skipped instead of failing the phase.
+        self.nvram_with({}, [])
+        ctx = types.SimpleNamespace(
+            is_protected=True,
+            omarchy_install={"boot": {"enable_fallback": True}, "storage": {"esp_device": "/dev/nvme1n1p3"}},
+        )
+        warnings = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl, "_split_partition_device", return_value=("/dev/nvme1n1", 3)), \
+                mock.patch.object(phases_impl, "_install_limine_efi",
+                                  lambda _ctx, *, disk, part, pre_state, **_: phases_impl._register_limine_efi_entry(
+                                      disk, part, LOADER, pre_state=pre_state)), \
+                mock.patch.object(phases_impl, "_warn_boot_entry_refused", warnings.append):
+            phases_impl._install_pre_mounted_limine(ctx)
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(len(warnings), 1)
+
+    def test_an_unreadable_variable_store_leaves_only_our_fallback_as_a_route(self):
+        esp = self.tmp / "esp"
+        (esp / "EFI" / "BOOT").mkdir(parents=True)
+        (esp / "EFI" / "BOOT" / "BOOTX64.EFI").write_bytes(b"MZ")
+        errors = []
+        with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
+                mock.patch.object(phases_impl.platform, "machine", return_value="x86_64"), \
+                mock.patch.object(phases_impl, "error", errors.append):
+            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("cannot be read", errors[0])
+            with self.assertRaises(RuntimeError) as caught:
+                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=False)
+        self.assertIn("cannot be read", str(caught.exception))
 
 
 if __name__ == "__main__":

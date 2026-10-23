@@ -49,6 +49,27 @@ ENCRYPT="${OMARCHY_INTEGRATION_ENCRYPT:-false}"
 # assert anything.
 KB_LAYOUT="${OMARCHY_INTEGRATION_KB_LAYOUT:-us}"
 
+# The characters type_text cannot type under a layout, or a failure for a
+# layout it cannot type at all. type_text sends US key positions over QMP and
+# the guest reads them through its own keymap: KB_LAYOUT at the installed
+# system's console and LUKS prompt, us on the live ISO. On uk only @ and ~ of
+# what type_text sends sit on other keys (Shift+' and Shift+#), and no step
+# types them into the installed system. Other layouts move what every run
+# types: de swaps y and z, so the passphrase "omarchy" arrives as "omarchz"
+# and the unlock and the console login fail. Teach type_text a layout's keys
+# before allowing it here.
+kb_layout_untypeable() {
+  case "$1" in
+    us) echo "" ;;
+    uk) echo "@~" ;;
+    *)
+      echo "OMARCHY_INTEGRATION_KB_LAYOUT=$1: the harness types US key positions and can type only the us and uk layouts" >&2
+      return 1
+      ;;
+  esac
+}
+KB_UNTYPEABLE=$(kb_layout_untypeable "$KB_LAYOUT") || exit 1
+
 BASE_DIR="$ROOT/test-runs/$(basename "$ISO" .iso)-integration"
 if [[ $FIRMWARE == bios ]]; then
   BASE_DIR+="-bios"
@@ -328,6 +349,10 @@ type_text() {
 
   for ((i = 0; i < ${#text}; i++)); do
     ch=${text:i:1}
+    if [[ $KB_UNTYPEABLE == *"$ch"* ]]; then
+      echo "type_text: $ch is on another key in the $KB_LAYOUT layout" >&2
+      return 1
+    fi
     case "$ch" in
       [a-z0-9]) press "$ch" ;;
       [A-Z]) press "shift-${ch,,}" ;;

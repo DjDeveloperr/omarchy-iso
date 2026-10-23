@@ -192,11 +192,11 @@ class BootRouteValidationTest(unittest.TestCase):
         path.write_bytes(contents)
         return path
 
-    def validate(self, entries):
+    def validate(self, entries, fallback_is_ours=True):
         state = {"entries": entries, "order": list(entries), "raw": ""}
         with mock.patch.object(phases_impl, "_read_efibootmgr", return_value=state), \
              mock.patch.object(phases_impl, "error") as warn:
-            phases_impl._validate_uefi_boot_routes(self.esp)
+            phases_impl._validate_uefi_boot_routes(self.esp, fallback_is_ours=fallback_is_ours)
         return warn
 
     def test_both_routes_present_is_silent(self):
@@ -237,8 +237,23 @@ class BootRouteValidationTest(unittest.TestCase):
         state = {"entries": {"0000": "Windows Boot Manager"}, "order": ["0000"], "raw": ""}
         with mock.patch.object(phases_impl, "_read_efibootmgr", return_value=state):
             with self.assertRaises(RuntimeError) as caught:
-                phases_impl._validate_uefi_boot_routes(self.esp)
+                phases_impl._validate_uefi_boot_routes(self.esp, fallback_is_ours=True)
         self.assertIn("no bootable route", str(caught.exception))
+
+    def test_a_removable_loader_this_install_did_not_write_is_no_route(self):
+        # On a shared ESP with the fallback off, EFI/BOOT/BOOTX64.EFI is
+        # another OS's loader. It starts that OS, not this install.
+        self.write_fallback()
+        with self.assertRaises(RuntimeError) as caught:
+            self.validate({"0000": "Windows Boot Manager"}, fallback_is_ours=False)
+        self.assertIn("no bootable route", str(caught.exception))
+        self.assertIn("not written by this install", str(caught.exception))
+
+    def test_a_registered_install_next_to_another_oss_removable_loader_warns(self):
+        self.write_fallback()
+        warn = self.validate({"0002": "Limine"}, fallback_is_ours=False)
+        warn.assert_called_once()
+        self.assertIn("'Limine' UEFI boot entry alone", warn.call_args[0][0])
 
 
 class BootEntryRegistrationTest(unittest.TestCase):
