@@ -96,6 +96,12 @@ elif "--bootnext" in args:
         sys.exit(5)
     nvram["next"] = num
 json.dump(nvram, open(path, "w"))
+# FAKE_NON_UTF8: firmware whose legacy entries carry raw bytes. efibootmgr
+# prints the boot list after every write (test_command_capture.py has the
+# bytes from a real machine), and its own messages come through stderr.
+if os.environ.get("FAKE_NON_UTF8"):
+    sys.stdout.buffer.write(b"Boot0000* Notebook Hard Drive\tBBS(HD,\x80\x7f\xff\x04\xe0\x7f,)\n")
+    sys.stderr.buffer.write(b"efibootmgr: \xff\xfe\n")
 '''
 
 FAKE_LSBLK = r'''#!/usr/bin/env python3
@@ -448,6 +454,16 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
                         phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
             self.nvram_with({"0003": self.entry("Limine", OURS, part=3)}, ["0003"])
             phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
+
+    def test_raw_bytes_in_the_firmware_listing_do_not_stop_the_install(self):
+        # A legacy entry with bytes that are not UTF-8, in the list
+        # efibootmgr prints after each write and in its messages.
+        self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
+        with mock.patch.dict(os.environ, {"FAKE_NON_UTF8": "1"}), \
+                mock.patch.object(phases_impl, "error", lambda _message: None):
+            nvram = self.register()
+        self.assertEqual(self.writes(), ["--create", "--bootorder", "--bootnext"])
+        self.assertEqual(nvram.get("next"), nvram["order"][0])
 
     def test_an_unreadable_variable_store_skips_registration(self):
         # Every NVRAM write would fail the same way, so none is tried, and

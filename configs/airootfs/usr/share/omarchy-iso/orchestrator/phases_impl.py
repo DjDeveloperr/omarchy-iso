@@ -1439,10 +1439,9 @@ def _register_limine_efi_entry(
         and num != limine_num
         and num in pre_state["entries"]
     ]
-    ordered = subprocess.run(
-        ["efibootmgr", "--bootorder", ",".join([limine_num, *keep])],
-        check=False, capture_output=True, text=True,
-    )
+    # capture(): efibootmgr prints the boot list after a write, and legacy
+    # entries can carry bytes that are not UTF-8.
+    ordered = capture(["efibootmgr", "--bootorder", ",".join([limine_num, *keep])])
     if ordered.returncode != 0:
         # BootOrder is another NVRAM write and can be refused on its own. The
         # entry exists either way, so this costs Omarchy its place at the front
@@ -1461,10 +1460,7 @@ def _register_limine_efi_entry(
     # Now" after a free-space install started the other install. BootNext is
     # read before BootOrder and that firmware honours it, so the first boot
     # reaches what was just installed whatever happens to BootOrder.
-    nexted = subprocess.run(
-        ["efibootmgr", "--bootnext", limine_num],
-        check=False, capture_output=True, text=True,
-    )
+    nexted = capture(["efibootmgr", "--bootnext", limine_num])
     if nexted.returncode != 0:
         next_detail = (nexted.stderr or "").strip() or f"exit status {nexted.returncode}"
         error(
@@ -1489,6 +1485,7 @@ def _create_limine_efi_entry(disk: Path, part: int, loader: str) -> subprocess.C
         check=False,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
     )
 
 
