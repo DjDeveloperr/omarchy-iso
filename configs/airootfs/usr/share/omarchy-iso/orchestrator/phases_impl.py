@@ -1238,89 +1238,80 @@ def _register_limine_efi_entry(
             "so no boot entry can be written"
         )
         return
-    # Replace only an entry identical to the one created below. Other "Limine"
-    # entries belong to other installs, such as the Omarchy a free-space
-    # install is put next to; deleting every "Limine" entry would leave those
-    # installs with none. A second loader on this same ESP, such as
-    # \EFI\backup\limine.efi, is a separate boot option and stays too.
-    # An efibootmgr that prints no paths matches nothing, and a reinstall onto
-    # the same ESP then leaves one duplicate behind, which is harmless.
+    # An entry identical to the one a create would add (active, labelled
+    # "Limine", this ESP, this loader) already boots this install: the loader
+    # it names was just written. It is reused and nothing is created, so the
+    # entry that boots the machine is never deleted to make way for a new
+    # one, and a full NVRAM needs no room. One switched off in the firmware
+    # is not identical, since BootOrder skips it. Other "Limine" entries
+    # belong to other installs, such as the Omarchy a free-space install is
+    # put next to, and a second loader on this same ESP, such as
+    # \EFI\backup\limine.efi, is a separate boot option; neither is touched.
+    # An efibootmgr that prints no paths matches nothing, and a reinstall
+    # onto the same ESP then leaves one duplicate behind, which is harmless.
     esp = _partition_guid(disk, part)
-    stale_limine = [
+    identical = [
         num
         for num, text in pre_state["entries"].items()
-        if _is_limine_entry_for(text, esp, loader)
+        if _is_limine_entry_for(text, esp, loader) and num not in pre_state.get("inactive", ())
     ]
+    if identical:
+        limine_num = identical[0]
+        info(f"› Reusing the 'Limine' boot entry Boot{limine_num}, which already starts this loader")
+    else:
+        created = _create_limine_efi_entry(disk, part, loader)
+        detail = (created.stderr or "").strip()
+        if created.returncode != 0:
+            # Attach the reason to the failure. efibootmgr's stderr did reach
+            # the install log before (the dashboard merges the child's
+            # streams), but CalledProcessError carries only argv and the exit
+            # status, so the traceback people paste into a report says nothing
+            # about why.
+            reason = f"efibootmgr --create exited {created.returncode}"
+            _warn_boot_entry_refused(f"{reason}: {detail}" if detail else reason)
+            return
+        if detail:
+            error(f"efibootmgr: {detail}")
 
-    def delete(num: str) -> bool:
-        return subprocess.run(
+        # The entry just created: a "Limine" entry the earlier listing did not
+        # show. Firmware that keeps one option per device path can answer the
+        # create with an option it already has, which counts the same way.
+        # The first such entry may be another install's, so one that starts
+        # this loader on this ESP comes first; a listing without device paths
+        # keeps list order.
+        post_state = _read_efibootmgr()
+        if post_state.get("unreadable"):
+            _warn_boot_entry_refused(
+                "efibootmgr --create exited 0 but the boot entries cannot be read back "
+                f"({post_state['unreadable']}), so BootOrder and BootNext are left alone"
+            )
+            return
+        new_limine = sorted(
+            [
+                num
+                for num in _find_label_entries(post_state["entries"], "Limine")
+                if num not in pre_state["entries"]
+            ],
+            key=lambda num: not _is_limine_entry_for(post_state["entries"][num], esp, loader),
+        )
+        if not new_limine:
+            _warn_boot_entry_refused(
+                "efibootmgr --create exited 0 but no 'Limine' entry is registered, so this "
+                "firmware discarded the variable as soon as it was written"
+            )
+            return
+        limine_num = new_limine[0]
+
+    # Duplicates of the reused entry go, never the reused one. One whose
+    # delete fails is still a working copy, and stays in BootOrder.
+    deleted = [
+        num
+        for num in identical[1:]
+        if subprocess.run(
             ["efibootmgr", "--bootnum", num, "--delete-bootnum"],
             check=False, capture_output=True,
         ).returncode == 0
-
-    # The old entry goes only once its replacement exists. It may be this
-    # ESP's only boot route: a protected target can have no removable loader,
-    # so firmware that takes the delete and refuses the create would leave
-    # the machine with nothing to start it.
-    created = _create_limine_efi_entry(disk, part, loader)
-    # Except when NVRAM has no room for both. The old entry's slot is then
-    # the only way to a new one, so one identical entry makes way and the
-    # create is tried once more.
-    freed: list[str] = []
-    if created.returncode != 0 and "no space left on device" in (created.stderr or "").lower():
-        freed = next(([num] for num in stale_limine if delete(num)), [])
-        if freed:
-            created = _create_limine_efi_entry(disk, part, loader)
-    detail = (created.stderr or "").strip()
-    if created.returncode != 0:
-        # Attach the reason to the failure. efibootmgr's stderr did reach the
-        # install log before (the dashboard merges the child's streams), but
-        # CalledProcessError carries only argv and the exit status, so the
-        # traceback people paste into a report says nothing about why.
-        reason = f"efibootmgr --create exited {created.returncode}"
-        if freed:
-            reason += f" after the old entry Boot{freed[0]} was deleted to make room"
-        _warn_boot_entry_refused(f"{reason}: {detail}" if detail else reason)
-        return
-    if detail:
-        error(f"efibootmgr: {detail}")
-
-    if freed:
-        info(f"› NVRAM was full: replaced the old 'Limine' entry Boot{freed[0]} in place")
-
-    # The entry just created: a "Limine" entry that was not there before, or
-    # that reuses the number freed for it above. Firmware that keeps one
-    # option per device path can instead answer the create with the identical
-    # entry it already has, which is the new one then, so those come last.
-    # The first "Limine" entry in the list may be another install's, so one
-    # that starts this loader on this ESP comes first; a listing without
-    # device paths keeps list order.
-    post_state = _read_efibootmgr()
-    if post_state.get("unreadable"):
-        _warn_boot_entry_refused(
-            "efibootmgr --create exited 0 but the boot entries cannot be read back "
-            f"({post_state['unreadable']}), so BootOrder and BootNext are left alone"
-        )
-        return
-    new_limine = sorted(
-        [
-            num
-            for num in _find_label_entries(post_state["entries"], "Limine")
-            if num not in pre_state["entries"] or num in freed
-        ] + [num for num in stale_limine if num in post_state["entries"] and num not in freed],
-        key=lambda num: not _is_limine_entry_for(post_state["entries"][num], esp, loader),
-    )
-    if not new_limine:
-        _warn_boot_entry_refused(
-            "efibootmgr --create exited 0 but no 'Limine' entry is registered, so this "
-            "firmware discarded the variable as soon as it was written"
-        )
-        return
-    limine_num = new_limine[0]
-
-    # Only now the old identical entries go, never the one just picked. One
-    # whose delete fails still holds the old entry, and stays in BootOrder.
-    deleted = freed + [num for num in stale_limine if num not in freed and num != limine_num and delete(num)]
+    ]
 
     keep = [
         num
@@ -1840,12 +1831,14 @@ def _write_pre_mounted_limine_defaults(ctx: InstallContext) -> None:
 
 # ── efibootmgr ───────────────────────────────────────────────────────────────
 
-_BOOT_ENTRY_RE = re.compile(r"^Boot([0-9A-Fa-f]{4})\*?\s+(.*)$")
+_BOOT_ENTRY_RE = re.compile(r"^Boot([0-9A-Fa-f]{4})(\*?)\s+(.*)$")
 _BOOT_ORDER_RE = re.compile(r"^BootOrder:\s*(.*)$")
 
 
 def _read_efibootmgr() -> dict:
-    """The boot entries and BootOrder, as `efibootmgr --verbose` lists them.
+    """The boot entries and BootOrder, as `efibootmgr --verbose` lists them,
+    and under "inactive" the entries listed without the "*" that marks
+    LOAD_OPTION_ACTIVE, which firmware skips in BootOrder.
 
     A UEFI boot can still have no EFI variable store: efi=noruntime, or
     firmware that faulted so the kernel turned runtime services off (T2
@@ -1856,19 +1849,23 @@ def _read_efibootmgr() -> dict:
     """
     res = capture(["efibootmgr", "--verbose"])
     entries: dict[str, str] = {}
+    inactive: set[str] = set()
     order: list[str] = []
     if res.returncode != 0:
         reason = (res.stderr or "").strip() or f"efibootmgr exited {res.returncode}"
-        return {"entries": entries, "order": order, "raw": res.stdout, "unreadable": reason}
+        return {"entries": entries, "inactive": inactive, "order": order, "raw": res.stdout, "unreadable": reason}
     for line in res.stdout.splitlines():
         m = _BOOT_ENTRY_RE.match(line)
         if m:
-            entries[m.group(1).upper()] = m.group(2).strip()
+            num = m.group(1).upper()
+            entries[num] = m.group(3).strip()
+            if not m.group(2):
+                inactive.add(num)
             continue
         m = _BOOT_ORDER_RE.match(line)
         if m:
             order = [n.strip().upper() for n in m.group(1).split(",") if n.strip()]
-    return {"entries": entries, "order": order, "raw": res.stdout}
+    return {"entries": entries, "inactive": inactive, "order": order, "raw": res.stdout}
 
 
 def _find_label_entries(entries: dict[str, str], needle: str) -> list[str]:
