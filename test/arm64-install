@@ -60,6 +60,9 @@ ssh-keygen -q -t ed25519 -N '' -C arm64-install -f "$SSH_KEY"
 # architecture's answers are changed and it is redone.
 eval "$(sed -n '/^detect_packages() {$/,/^}$/p' "$ROOT/test/integration.d/base-test.sh")"
 eval "$(sed -n '/^build_cidata() {$/,/^  mcopy -i "\$CIDATA_IMG"/p' "$ROOT/test/integration.d/base-test.sh"; echo '}')"
+# ... and the harness's settings build_cidata reads, with the harness's defaults:
+# the disk it lays the partitions out for, the UKI and encryption choices.
+eval "$(grep -E '^(DISK_GB|UKI|ENCRYPT)=' "$ROOT/test/integration.d/base-test.sh")"
 ISO=$iso detect_packages
 build_cidata
 answers=$state/cidata/user_configuration.json
@@ -84,7 +87,7 @@ if [[ -n ${PLATFORM:-} ]]; then
   rng+=",romfile=$state/n1x.rom"
 fi
 port=$(( 20000 + RANDOM % 10000 ))
-qemu-img create -q -f qcow2 "$state/target.qcow2" 40G
+qemu-img create -q -f qcow2 "$state/target.qcow2" "${DISK_GB}G"
 cp "$vars" "$state/vars.fd"
 : >"$out/serial.log"
 # The empty disk is first in the boot order: the firmware falls through to the
