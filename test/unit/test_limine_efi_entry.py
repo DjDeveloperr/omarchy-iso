@@ -426,9 +426,28 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.nvram_with({"0004": self.entry("Limine", OTHER)}, ["0004"])
         with mock.patch.object(phases_impl, "error", lambda _message: None):
             with self.assertRaises(RuntimeError):
-                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+                phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
             self.nvram_with({"0004": self.entry("Limine", OTHER), "0005": self.entry("Limine", OURS, part=3)}, ["0005", "0004"])
-            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+            phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
+
+    def test_boot_check_counts_only_an_active_entry_that_starts_our_loader(self):
+        # validate_boot: our entry was refused and no fallback was deployed.
+        # A "Limine" entry on this ESP that firmware skips (no "*"), or one
+        # that starts another loader there, starts nothing of this install.
+        esp = self.tmp / "esp"
+        esp.mkdir()
+        unusable = {
+            "switched off": self.entry("Limine", OURS, part=3) + ["inactive"],
+            "a backup loader": self.entry("Limine", OURS, part=3, loader="\\EFI\\backup\\limine.efi"),
+        }
+        with mock.patch.object(phases_impl, "error", lambda _message: None):
+            for name, entry in unusable.items():
+                with self.subTest(name):
+                    self.nvram_with({"0003": entry}, ["0003"])
+                    with self.assertRaises(RuntimeError):
+                        phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
+            self.nvram_with({"0003": self.entry("Limine", OURS, part=3)}, ["0003"])
+            phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
 
     def test_an_unreadable_variable_store_skips_registration(self):
         # Every NVRAM write would fail the same way, so none is tried, and
@@ -469,11 +488,11 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FAKE_NO_EFIVARS": "1"}), \
                 mock.patch.object(phases_impl.platform, "machine", return_value="x86_64"), \
                 mock.patch.object(phases_impl, "error", errors.append):
-            phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=True)
+            phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=True)
             self.assertEqual(len(errors), 1)
             self.assertIn("cannot be read", errors[0])
             with self.assertRaises(RuntimeError) as caught:
-                phases_impl._validate_uefi_boot_routes(esp, fallback_is_ours=False)
+                phases_impl._validate_uefi_boot_routes(esp, loader=LOADER, fallback_is_ours=False)
         self.assertIn("cannot be read", str(caught.exception))
 
 

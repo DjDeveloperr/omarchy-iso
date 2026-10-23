@@ -53,6 +53,8 @@ for _name, _attrs in _archinstall_names.items():
 from orchestrator import phases_impl  # noqa: E402
 from orchestrator.context import InstallContext, _default_omarchy_install  # noqa: E402
 
+LOADER = "\\EFI\\limine\\limine_x64.efi"
+
 
 def make_ctx(tmp: Path, omarchy_install: dict) -> InstallContext:
     return InstallContext(
@@ -196,7 +198,7 @@ class BootRouteValidationTest(unittest.TestCase):
         state = {"entries": entries, "order": list(entries), "raw": ""}
         with mock.patch.object(phases_impl, "_read_efibootmgr", return_value=state), \
              mock.patch.object(phases_impl, "error") as warn:
-            phases_impl._validate_uefi_boot_routes(self.esp, fallback_is_ours=fallback_is_ours)
+            phases_impl._validate_uefi_boot_routes(self.esp, loader=LOADER, fallback_is_ours=fallback_is_ours)
         return warn
 
     def test_both_routes_present_is_silent(self):
@@ -237,7 +239,7 @@ class BootRouteValidationTest(unittest.TestCase):
         state = {"entries": {"0000": "Windows Boot Manager"}, "order": ["0000"], "raw": ""}
         with mock.patch.object(phases_impl, "_read_efibootmgr", return_value=state):
             with self.assertRaises(RuntimeError) as caught:
-                phases_impl._validate_uefi_boot_routes(self.esp, fallback_is_ours=True)
+                phases_impl._validate_uefi_boot_routes(self.esp, loader=LOADER, fallback_is_ours=True)
         self.assertIn("no bootable route", str(caught.exception))
 
     def test_a_removable_loader_this_install_did_not_write_is_no_route(self):
