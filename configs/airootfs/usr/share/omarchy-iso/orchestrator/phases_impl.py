@@ -823,9 +823,11 @@ def _start_target_keyring_init(ctx: InstallContext) -> None:
     mounts are held.
 
     Started after the last pacstrap (each runs its own --init on this dir)
-    and joined by create_factory_snapshot: nothing in between reads the
-    keyring (the offline repo is SigLevel = Never) or writes it, and the
-    snapshot must not capture it half-written. A unit rather than a plain
+    and joined by create_factory_snapshot: on x86_64 nothing in between
+    reads the keyring (the offline repo is SigLevel = Never) or writes it,
+    and the snapshot must not capture it half-written. On aarch64 the
+    runtime's post-install inits and populates it itself, so
+    run_system_finalizer joins it first. A unit rather than a plain
     child process: pacman-key leaves a gpg-agent and dirmngr behind, which
     systemd kills with the rest of the unit's cgroup the moment pacman-key
     exits (sockets under the target's gnupg dir would otherwise block the
@@ -1887,6 +1889,13 @@ def run_system_finalizer(ctx: InstallContext) -> None:
         cmd = ["/usr/bin/omarchy-apply-system", "--defer-provisioning", "--first-install"]
     else:
         cmd = ["/usr/bin/omarchy-apply-system", "--install-user", ctx.username, "--first-install"]
+
+    # On aarch64 the runtime runs pacman-key --init and --populate on the
+    # target (omarchy's install/post-install/pacman.sh). Two pacman-keys on
+    # one gnupg dir break each other's writes, so the keyring unit finishes
+    # first; on x86_64 it keeps running alongside.
+    if platform.machine() == "aarch64":
+        _join_target_keyring_init(ctx)
 
     _mask_mkinitcpio_pacman_hooks(ctx, ctx.target, TARGET_DEFERRED_BOOT_HOOKS)
     try:
