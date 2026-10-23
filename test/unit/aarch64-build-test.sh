@@ -13,6 +13,16 @@ trap 'rm -rf "$fixture" /tmp/omarchy-aarch64-base.packages' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# The arm64 archiso patches are checked against the pinned submodule. A
+# checkout without it skips those checks; CI fetches it, so there a missing
+# submodule fails rather than passing checks that never ran.
+have_archiso() {
+  [[ -f "$ROOT/archiso/archiso/mkarchiso" ]] && return 0
+  [[ -n ${CI:-} || -n ${GITHUB_ACTIONS:-} ]] && fail "the archiso submodule is not checked out, so the arm64 patches go unchecked"
+  echo "skip: the archiso submodule is not checked out, so the arm64 patches go unchecked" >&2
+  return 1
+}
+
 # --- entrypoint argument contract -------------------------------------------
 bash -n "$ROOT/bin/omarchy-iso-make" "$ROOT/builder/build-iso.sh" \
   "$ROOT/builder/aarch64-package-filter.sh" "$ROOT/builder/grub-platform.sh" \
@@ -98,7 +108,7 @@ for cfg in grub.cfg loopback.cfg; do
 done
 
 # --- arm64 archiso patch still applies to the pinned submodule ---------------
-if [[ -f "$ROOT/archiso/archiso/mkarchiso" ]]; then
+if have_archiso; then
   cp "$ROOT/archiso/archiso/mkarchiso" "$fixture/mkarchiso"
   patch --batch --forward --fuzz=0 --dry-run "$fixture/mkarchiso" <"$ROOT/builder/archiso-v87-aarch64-grub.patch" >/dev/null \
     || fail "archiso arm64 GRUB patch no longer applies to the pinned submodule"
@@ -205,7 +215,7 @@ grep -F 'chainloader /%INSTALL_DIR%/boot/%ARCH%/omarchy-live.efi' "$ROOT/configs
 grep -F 'omarchy-live.efi' "$ROOT/configs/grub/grub.cfg" | grep -Fq ' iommu.passthrough=0 ' || fail "the live UKI entry leaves device memory access untranslated"
 grep -Fqx 'dtb_dir=/boot/dtbs/$1/qcom' "$uki" || fail "the live UKI does not take the device trees the kernel keeps under its own name"
 # mkarchiso copies the UKI onto the ISO only with this patch, applied after the GRUB one.
-if [[ -f "$ROOT/archiso/archiso/mkarchiso" ]]; then
+if have_archiso; then
   cp "$ROOT/archiso/archiso/mkarchiso" "$fixture/mkarchiso-qualcomm"
   patch --batch --forward --fuzz=0 "$fixture/mkarchiso-qualcomm" <"$ROOT/builder/archiso-v87-aarch64-grub.patch" >/dev/null \
     && patch --batch --forward --fuzz=0 "$fixture/mkarchiso-qualcomm" <"$ROOT/builder/archiso-v87-aarch64-boot-efi.patch" >/dev/null \
