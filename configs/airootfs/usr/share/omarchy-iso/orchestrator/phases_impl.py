@@ -1382,7 +1382,8 @@ def _warn_boot_entry_refused(reason: str) -> None:
     """Registration failed. Report it and carry on to the removable-media route.
 
     Firmware that refuses a boot-variable write still boots this install from
-    EFI/BOOT/BOOTX64.EFI, which needs no NVRAM. Raising here is what issue #127
+    EFI/BOOT/BOOT<arch>.EFI, which needs no NVRAM, where the install writes that
+    loader (an EFI partition of its own). Raising here is what issue #127
     reports: registration runs several phases before finalize_limine_boot writes
     that loader, so the abort leaves the machine with neither route. validate_boot
     is the one place that decides whether an install is reachable, and it already
@@ -1390,8 +1391,8 @@ def _warn_boot_entry_refused(reason: str) -> None:
     """
     error(
         f"Warning: this firmware would not register a 'Limine' UEFI boot entry. {reason}. "
-        f"The install continues, because Omarchy also deploys EFI/BOOT/BOOT{_efi_arch_suffix()}.EFI on its "
-        "own EFI partition and firmware takes that path when nothing in NVRAM matches. "
+        f"The install continues: where Omarchy writes EFI/BOOT/BOOT{_efi_arch_suffix()}.EFI on an EFI "
+        "partition of its own, firmware takes that path when nothing in NVRAM matches. "
         "The boot check at the end of the install stops an install that ends up with "
         "neither route."
     )
