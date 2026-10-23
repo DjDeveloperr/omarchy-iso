@@ -29,11 +29,13 @@ step_of() {
 }
 
 isos=$(sed -nE 's/^ *name: (iso-.*)$/\1/p' "$WORKFLOW")
-upload=$(grep -F '${{ matrix.arch }}' <<<"$isos") || fail "the build job uploads no per-architecture ISO artifact"
+# The build's own name ends in its architecture's expression, the install
+# jobs' in the architecture itself.
+upload=$(grep -vE -- '-(x86_64|aarch64)$' <<<"$isos") || fail "the build uploads no per-architecture ISO artifact"
 [[ $(grep -c "" <<<"$upload") == 1 ]] || fail "more than one ISO upload: $upload"
 grep -F 'run_attempt' <<<"$isos" && fail "an ISO artifact name carries the attempt, which a partial re-run's install jobs never find"
 for arch in x86_64 aarch64; do
-  want=${upload//'${{ matrix.arch }}'/$arch}
+  want=${upload%-*}-$arch
   grep -Fxq "$want" <<<"$isos" || fail "no install job fetches $want, the ISO the $arch build uploads"
 done
 step_of "$upload" | grep -Eq '^ *overwrite: true$' || fail "a build that runs again cannot replace its ISO"
@@ -47,4 +49,25 @@ while read -r name; do
 done <<<"$results"
 grep -Fq -- '-p "install-test-$RUN_ID-$ATTEMPT*"' "$ROOT/.github/workflows/install-test-comment.yml" \
   || fail "the comment workflow no longer reads install-test-<run>-<attempt>*"
+
+# Each install job waits for its own architecture's build and no other. A
+# job that needs a matrix job waits for all of its legs and is skipped when
+# any of them fails, so one architecture's failed build would skip the other
+# architecture's installs, though its ISO built.
+job_of() {
+  awk -v job="$1" '/^  [A-Za-z0-9_-]+:/ { keep = ($0 == "  " job ":") } keep' "$WORKFLOW"
+}
+for arch in x86_64 aarch64; do
+  job_of "build-$arch" | grep -Eq "^      ARCH: $arch\$" || fail "no build-$arch job builds the $arch ISO"
+  fetchers=0
+  for job in $(sed -nE 's/^  ([A-Za-z0-9_-]+):$/\1/p' "$WORKFLOW"); do
+    block=$(job_of "$job")
+    grep -Fxq "          name: iso-\${{ github.run_id }}-$arch" <<<"$block" || continue
+    fetchers=$((fetchers + 1))
+    needs=$(sed -nE 's/^    needs: *//p' <<<"$block")
+    builds=$(grep -oE 'build[A-Za-z0-9_-]*' <<<"$needs" | paste -sd ' ' - || true)
+    [[ $builds == "build-$arch" ]] || fail "$job fetches the $arch ISO but waits for ${builds:-no build}, not only build-$arch (needs: $needs)"
+  done
+  ((fetchers > 0)) || fail "no install job fetches the $arch ISO"
+done
 echo "install test artifact names passed"
