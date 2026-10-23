@@ -284,6 +284,18 @@ class RegisterLimineEfiEntryTest(unittest.TestCase):
         self.assertEqual(nvram["order"], ["0001", "0003", "0004"])
         self.assertEqual(nvram.get("next"), "0001", nvram)
 
+    def test_a_loader_whose_name_only_starts_with_ours_is_not_ours(self):
+        # \EFI\limine\limine_x64.efi.bak, listed before the real entry, is a
+        # separate boot option: it is neither reused nor deleted, and BootNext
+        # goes to the entry that starts the real loader.
+        backup = self.entry("Limine", OURS, part=3, loader=LOADER + ".bak")
+        ours = self.entry("Limine", OURS, part=3)
+        self.nvram_with({"0001": backup, "0003": ours}, ["0001", "0003"])
+        nvram = self.register()
+        self.assertEqual(nvram["entries"], {"0001": backup, "0003": ours})
+        self.assertEqual(nvram.get("next"), "0003")
+        self.assertNotIn("--delete-bootnum", self.writes())
+
     def test_other_loaders_on_this_esp_survive(self):
         # Only an entry identical to the one a create would add is reused:
         # same label, this ESP and this loader. A backup loader on the same

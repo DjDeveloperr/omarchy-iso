@@ -1800,13 +1800,15 @@ def _is_limine_entry_for(entry: str, guid: str, loader: str) -> bool:
     _register_limine_efi_entry creates: labelled "Limine", starting `loader`
     from the partition with GPT GUID `guid`. The listing reads
     "Limine<TAB>HD(part,GPT,<guid>,...)/\\EFI\\...", or ".../File(\\EFI\\...)"
-    with an older efivar; FAT is case-insensitive, and so is this."""
+    with an older efivar; FAT is case-insensitive, and so is this. The loader's
+    name has to end where `loader` ends: \\EFI\\limine\\limine_x64.efi.bak is
+    another boot option, not this one."""
     label, _, path = entry.lower().partition("\t")
-    loader = loader.lower()
+    loader = re.escape(loader.lower())
     return (
         label.strip() == "limine"
         and bool(guid) and guid in path
-        and (f")/{loader}" in path or f"file({loader})" in path)
+        and re.search(rf"(\)/{loader}|file\({loader}\))(?![\w.-])", path) is not None
     )
 
 
