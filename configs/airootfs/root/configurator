@@ -612,7 +612,7 @@ run_partition_decide() {
   # synthesize a whole-disk free region and mklabel gpt before mkpart.
   local FREE_SPACE_INFO pt_type disk_size_b
   needs_mklabel=false
-  pt_type=$(lsblk -dno PTTYPE "$disk" 2>/dev/null)
+  pt_type=$(partition_table_type "$disk")
   if [[ -z "$pt_type" ]]; then
     disk_size_b=$(lsblk -bdno SIZE "$disk" 2>/dev/null)
     if [[ -n "$disk_size_b" && "$disk_size_b" -gt 0 ]]; then
@@ -987,7 +987,7 @@ open_partition_tool() {
 # viable paths write the whole disk, so the free-space mode is not offered.
 requires_full_disk_install() {
   local pt_type free_space_b
-  pt_type=$(lsblk -dno PTTYPE "$disk" 2>/dev/null)
+  pt_type=$(partition_table_type "$disk")
 
   # a) No partition table: disk is empty
   [[ -z "$pt_type" ]] && return 0
