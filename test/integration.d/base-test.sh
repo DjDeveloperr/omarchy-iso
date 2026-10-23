@@ -49,26 +49,27 @@ ENCRYPT="${OMARCHY_INTEGRATION_ENCRYPT:-false}"
 # assert anything.
 KB_LAYOUT="${OMARCHY_INTEGRATION_KB_LAYOUT:-us}"
 
-# The characters type_text cannot type under a layout, or a failure for a
-# layout it cannot type at all. type_text sends US key positions over QMP and
-# the guest reads them through its own keymap: KB_LAYOUT at the installed
-# system's console and LUKS prompt, us on the live ISO. On uk only @ and ~ of
-# what type_text sends sit on other keys (Shift+' and Shift+#), and no step
-# types them into the installed system. Other layouts move what every run
-# types: de swaps y and z, so the passphrase "omarchy" arrives as "omarchz"
-# and the unlock and the console login fail. Teach type_text a layout's keys
-# before allowing it here.
-kb_layout_untypeable() {
+# type_text sends key positions over QMP and the guest reads them through its
+# own keymap: KB_LAYOUT at the installed system's console, LUKS prompt and
+# desktop, us on the live ISO (an autoinstall skips the configurator, the one
+# thing there that loads another). TYPE_LAYOUT is the layout being typed
+# into; a caller typing into anything else sets it. type_text knows us and
+# uk: of what it sends, kbd's uk map moves only @ (Shift+') and ~ (Shift+#,
+# the key beside Enter). Other layouts move what every run types: de swaps y
+# and z, so the passphrase "omarchy" arrives as "omarchz" and the unlock and
+# the console login fail. Teach type_text a layout's keys before allowing it
+# here.
+kb_layout_typeable() {
   case "$1" in
-    us) echo "" ;;
-    uk) echo "@~" ;;
+    us | uk) ;;
     *)
-      echo "OMARCHY_INTEGRATION_KB_LAYOUT=$1: the harness types US key positions and can type only the us and uk layouts" >&2
+      echo "OMARCHY_INTEGRATION_KB_LAYOUT=$1: the harness can type only the us and uk layouts" >&2
       return 1
       ;;
   esac
 }
-KB_UNTYPEABLE=$(kb_layout_untypeable "$KB_LAYOUT") || exit 1
+kb_layout_typeable "$KB_LAYOUT" || exit 1
+TYPE_LAYOUT=$KB_LAYOUT
 
 BASE_DIR="$ROOT/test-runs/$(basename "$ISO" .iso)-integration"
 if [[ $FIRMWARE == bios ]]; then
@@ -349,10 +350,6 @@ type_text() {
 
   for ((i = 0; i < ${#text}; i++)); do
     ch=${text:i:1}
-    if [[ $KB_UNTYPEABLE == *"$ch"* ]]; then
-      echo "type_text: $ch is on another key in the $KB_LAYOUT layout" >&2
-      return 1
-    fi
     case "$ch" in
       [a-z0-9]) press "$ch" ;;
       [A-Z]) press "shift-${ch,,}" ;;
@@ -367,8 +364,8 @@ type_text() {
       "=") press equal ;;
       "?") press shift-slash ;;
       "!") press shift-1 ;;
-      "~") press shift-grave_accent ;;
-      @) press shift-2 ;;
+      "~") if [[ $TYPE_LAYOUT == uk ]]; then press shift-backslash; else press shift-grave_accent; fi ;;
+      @) if [[ $TYPE_LAYOUT == uk ]]; then press shift-apostrophe; else press shift-2; fi ;;
       *) echo "type_text: unsupported character: $ch" >&2; return 1 ;;
     esac
     sleep 0.05
@@ -520,6 +517,9 @@ ssh_live_root() {
 }
 
 bootstrap_live_root_ssh() {
+  # The live ISO's console is us, whatever layout the install was given.
+  local TYPE_LAYOUT=us
+
   log "Authorizing root SSH on the live ISO via console login"
 
   mkdir -p "$BASE_DIR/www"
