@@ -580,7 +580,12 @@ run_partition_decide() {
     say --foreground 1 "BitLocker signature detected on $bl_part."
     say "Turn BitLocker off in Windows and wait for the drive to finish decrypting, then try again."
     say "Suspending BitLocker is not enough — the drive stays encrypted."
-    abort "Aborted: BitLocker is enabled on this disk."
+    echo
+    # Back to the mode picker rather than out of the installer: the free-space
+    # install is the default on a disk with partitions, so Enter lands here.
+    gum confirm --affirmative "Back" --negative "Quit installer" "Return to installation mode?" ||
+      abort "Aborted: BitLocker is enabled on this disk."
+    return 1
   fi
 
   # Omarchy always creates its own dedicated ESP in free space and never
@@ -944,14 +949,9 @@ disk_form() {
   boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
   exclude_disk=$(get_root_disk "$boot_source")
 
-  # List all installable disks, excluding the boot device if present
+  # Installable disks, internal ones first, without the boot device
   local available_disks
-  available_disks=$(
-    lsblk -dpno NAME,TYPE |
-      awk '$2=="disk"{print $1}' |
-      grep -E '/dev/(sd|hd|vd|nvme|mmcblk|xv)' |
-      { if [[ -n "$exclude_disk" ]]; then grep -Fvx "$exclude_disk"; else cat; fi; }
-  )
+  available_disks=$(install_disk_candidates "$exclude_disk")
 
   # Get available disks and format them with info
   local disk_options=""
@@ -1007,14 +1007,15 @@ requires_full_disk_install() {
 }
 
 install_mode_form() {
-  local choices=("Full disk install")
+  local free_space_offered=false partitions choices
 
   # The free-space/protected path registers an EFI boot entry and is UEFI-only.
   # Full-disk installs still support BIOS through the orchestrator's BIOS branch.
   if [[ -d /sys/firmware/efi ]] && ! $full_disk_only; then
-    choices+=("Free space install (alongside existing data)")
+    free_space_offered=true
   fi
-  choices+=("Choose a different disk")
+  partitions=$(partition_numbers "$disk" | grep -c .)
+  mapfile -t choices < <(install_mode_choices "$free_space_offered" "$partitions")
 
   step "Let's select how to install Omarchy..."
   install_mode=$(gum choose --header "Select installation mode on $disk" "${choices[@]}") || abort
