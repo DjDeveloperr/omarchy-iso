@@ -223,7 +223,7 @@ class KernelSelectionTest(unittest.TestCase):
                      mock.patch.object(phases_impl, "_validate_package_signing"), \
                      mock.patch.object(phases_impl.arch, "has_uefi", return_value=True, create=True), \
                      mock.patch.object(phases_impl, "_read_efibootmgr", return_value={
-                         "entries": {"0001": "Limine\tHD(1,GPT,test)"},
+                         "entries": {"0001": "Limine\tHD(1,GPT,test)/\\EFI\\limine\\limine_x64.efi"},
                      }):
                     phases_impl.validate_boot(ctx)
                     (target / f"boot/EFI/Linux/omarchy_{expected}.efi").unlink()

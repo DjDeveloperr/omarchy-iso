@@ -1215,8 +1215,13 @@ def _install_limine_efi(
     hook_command = f"/usr/bin/cp /usr/share/limine/{source_name} {target_path}"
     _write_limine_pacman_hook(ctx.target, hook_command)
 
-    loader = "\\" + str(Path(esp_path) / efi_binary).strip("/").replace("/", "\\")
-    _register_limine_efi_entry(disk, part, loader, pre_state=pre_state)
+    _register_limine_efi_entry(disk, part, _limine_efi_loader(esp_path, efi_binary), pre_state=pre_state)
+
+
+def _limine_efi_loader(esp_path: str, efi_binary: str) -> str:
+    """The loader path a "Limine" boot entry starts, as efibootmgr --loader
+    takes it: \\EFI\\limine\\limine_x64.efi for the default esp_path."""
+    return "\\" + str(Path(esp_path) / efi_binary).strip("/").replace("/", "\\")
 
 
 def _register_limine_efi_entry(
@@ -2986,6 +2991,9 @@ def validate_boot(ctx: InstallContext) -> None:
         # install claimed the path (enable_fallback, see _boot_intent).
         _validate_uefi_boot_routes(
             esp_mount,
+            loader=_limine_efi_loader(
+                boot.get("esp_path", "/EFI/limine"), boot.get("efi_binary", _default_limine_efi_binary())
+            ),
             fallback_is_ours=not ctx.is_protected or bool(boot.get("enable_fallback")),
         )
 
@@ -3183,7 +3191,7 @@ def _validate_linux_boot_entry(esp_mount: Path, config_text: str, encrypted: boo
     raise RuntimeError(f"{esp_mount / 'limine.conf'} has no bootable Omarchy Linux entry with a kernel and initramfs")
 
 
-def _validate_uefi_boot_routes(esp_mount: Path, *, fallback_is_ours: bool) -> None:
+def _validate_uefi_boot_routes(esp_mount: Path, *, loader: str, fallback_is_ours: bool) -> None:
     """Check the two ways firmware can reach this install, and insist on one.
 
     The named "Limine" boot variable is the route we prefer and the one
@@ -3200,21 +3208,29 @@ def _validate_uefi_boot_routes(esp_mount: Path, *, fallback_is_ours: bool) -> No
 
     The removable path counts only when `fallback_is_ours`: on an ESP this
     install shares and did not claim the path on, the file there is another
-    OS's loader and starts that OS.
+    OS's loader and starts that OS. The entry counts only when firmware will
+    use it (active) and it starts `loader` on this ESP: a switched-off entry,
+    or one for a backup loader on the same ESP, starts nothing of this one.
     """
     fallback_binary = esp_mount / "EFI" / "BOOT" / f"BOOT{_efi_arch_suffix()}.EFI"
     fallback_present = fallback_binary.exists() and fallback_binary.stat().st_size > 0
     has_fallback = fallback_is_ours and fallback_present
-    # Only an entry naming this ESP counts: next to another Omarchy, its
-    # "Limine" entry says nothing about whether ours survived. If the ESP's
-    # GUID cannot be read, any "Limine" entry does.
+    # Next to another Omarchy, its "Limine" entry says nothing about whether
+    # ours survived. If the ESP's GUID cannot be read, an active "Limine"
+    # entry that names this loader, or names no path at all, has to do.
     esp = _mounted_partition_guid(esp_mount)
     state = _read_efibootmgr()
     entries = state["entries"]
-    has_entry = any(
-        not esp or esp in entries[num].lower()
-        for num in _find_label_entries(entries, "Limine")
-    )
+
+    def starts_this_install(num: str) -> bool:
+        if num in state.get("inactive", ()):
+            return False
+        if esp:
+            return _is_limine_entry_for(entries[num], esp, loader)
+        label, _, path = entries[num].lower().partition("\t")
+        return label.strip() == "limine" and (not path or loader.lower() in path)
+
+    has_entry = any(starts_this_install(num) for num in entries)
 
     no_entry = (
         f"the EFI variable store cannot be read ({state['unreadable']})"
