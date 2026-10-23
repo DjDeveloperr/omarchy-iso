@@ -40,6 +40,19 @@
 
 set -euo pipefail
 
+# The pre-built UKI boots every install that keeps the defaults, so it has to
+# fit where the boot loader can place it (see the kms note at its config).
+# 128 MiB, the live initramfs's limit, is well over the 87 MiB it measures
+# without kms.
+prebuilt_uki_size_ok() {
+  local bytes limit=$((128 * 1024 * 1024))
+  bytes=$(stat -c %s "$1")
+  if ((bytes > limit)); then
+    echo "ERROR: the pre-built UKI is $bytes bytes, over the $limit limit (omacom/omarchy#5980)" >&2
+    return 1
+  fi
+}
+
 pacman_conf="${1:-}"
 output="${2:-}"
 shift 2 || true
@@ -344,11 +357,18 @@ RemainAfterExit=yes
 ExecStart=/usr/lib/omarchy/snapshot-overlay
 UNIT
 
+  # No kms hook. With autodetect skipped it would add every DRM driver and its
+  # firmware (nouveau's GSP firmware alone is ~110 MB): the UKI measured 247 MiB
+  # with it. Limine boots a UKI as an EFI chainload into one contiguous block
+  # below 4 GiB, and UKIs that size panic it on some laptops
+  # (omacom/omarchy#5980), as a 241 MiB initramfs does GRUB (#128). Without
+  # kms, Plymouth's LUKS prompt draws on the firmware framebuffer (simpledrm);
+  # the installed system's own rebuilds autodetect and keep kms.
   cat >"$root/etc/mkinitcpio-prebuilt-uki.conf" <<'CONF'
 MODULES=(thunderbolt)
 BINARIES=()
 FILES=()
-HOOKS=(base systemd plymouth autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt filesystems fsck sd-btrfs-overlayfs)
+HOOKS=(base systemd plymouth autodetect microcode modconf keyboard sd-vconsole block sd-encrypt filesystems fsck sd-btrfs-overlayfs)
 COMPRESSION="zstd"
 CONF
 
@@ -372,6 +392,7 @@ CONF
        -S autodetect 2>&1 | tail -25 ; then
     if [[ -f "$root/var/lib/omarchy-iso/prebuilt-uki.efi" ]]; then
       echo "Pre-built UKI: $(du -h "$root/var/lib/omarchy-iso/prebuilt-uki.efi" | cut -f1)"
+      prebuilt_uki_size_ok "$root/var/lib/omarchy-iso/prebuilt-uki.efi" || exit 1
     else
       echo "WARNING: mkinitcpio ran but left no UKI; the installer will build one"
     fi
