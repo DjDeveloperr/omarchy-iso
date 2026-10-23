@@ -217,6 +217,9 @@ drive_first_boot() {
   capture_console "success-firstboot-00-greeter"
   press ret
 
+  # Enter at the keyboard step takes the highlighted layout, English (US),
+  # which the form loads on the console at once and keeps: from there on the
+  # guest reads us, whatever layout the install was given.
   local waited=0 text step
   local -A answered=()
   while true; do
@@ -228,7 +231,7 @@ drive_first_boot() {
       press ret
       break
     elif grep -qi "keyboard layout" <<<"$text"; then
-      step="keyboard"; [[ -v answered[$step] ]] || { capture_console "success-firstboot-01-keyboard"; press ret; }
+      step="keyboard"; [[ -v answered[$step] ]] || { capture_console "success-firstboot-01-keyboard"; press ret; TYPE_LAYOUT=us; }
     elif grep -qi "Username" <<<"$text"; then
       step="username"; [[ -v answered[$step] ]] || { type_text "$GUEST_USER"; press ret; }
     elif grep -qi "Conf *irm" <<<"$text"; then
