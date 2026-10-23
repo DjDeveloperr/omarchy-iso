@@ -389,12 +389,45 @@ ssh_sudo() {
   ssh_guest "echo $GUEST_PASSWORD | sudo -S -p '' bash -c $(printf %q "$1")"
 }
 
+# Answer an encrypted boot's LUKS prompt, given what OCR read off the screen.
+# The busybox encrypt hook asks "A password is required to access the root
+# volume"; systemd-cryptsetup (the pre-built UKI's initramfs) asks "Please
+# enter passphrase for disk root". An initramfs mkinitcpio builds on the
+# machine (on BIOS, or for a layout the pre-built UKI lacks) asks with
+# Plymouth's lock field under the logo: OCR reads the logo ("OMARCHY",
+# or "OMARCHS" at this size) and nothing else. Once an encrypted run has
+# shown nothing but the logo for two samples in a row, nothing but that
+# prompt is listening to the keyboard, so type the passphrase blind. The
+# installer's dashboard always carries more text ("Installing Omarchy",
+# the tip line), and so does a booted system; the splash between the reboot
+# and the prompt discards keystrokes. Takes the screen's text, the name of
+# the caller's count of logo-only samples and a name for the screenshot,
+# and succeeds when it typed the passphrase.
+answer_luks_prompt() {
+  local text="$1" shot="$3" screen_words=${1//[^[:alpha:]]/}
+  local -n logo_samples="$2"
+
+  if grep -qiE "password is required|enter passphrase|unlocking" <<<"$text"; then
+    capture_console "success-$shot"
+  elif [[ ${screen_words,,} =~ ^(omarch[a-z]{0,2})?$ ]]; then
+    ((++logo_samples >= 2)) || return 1
+    capture_console "success-$shot-blind"
+    logo_samples=0
+  else
+    logo_samples=0
+    return 1
+  fi
+  type_text "$GUEST_PASSWORD"
+  press ret
+}
+
 # The deadline is wall-clock: under QEMU user networking every attempt can
 # spend its whole ConnectTimeout waiting for a banner, so counting only the
 # sleeps let a "300 s" wait run for ten minutes or more, silently.
 wait_for_ssh() {
   local timeout="$1" failure_name="${2:-failure-ssh-timeout}"
-  local started=$SECONDS next_note=30 next_unlock=0 progress_name
+  # shellcheck disable=SC2034 # answer_luks_prompt counts in logo_screens
+  local started=$SECONDS next_note=30 next_unlock=0 logo_screens=0 progress_name
 
   while ! ssh_guest true 2>/dev/null; do
     if ! vm_running; then
@@ -404,15 +437,9 @@ wait_for_ssh() {
 
     # Every boot of an encrypted install stops in the initramfs asking for the
     # passphrase, scenario overlays included.
-    # The busybox encrypt hook asks "A password is required to access the root
-    # volume"; systemd-cryptsetup (the pre-built UKI's initramfs) asks "Please
-    # enter passphrase for disk root". Same alternation as the install wait.
     if [[ ${ENCRYPT:-false} == true ]] && ((SECONDS - started >= next_unlock)); then
       ((next_unlock += 15))
-      if ocr_screen | grep -qiE "password is required|enter passphrase|unlocking"; then
-        type_text "$GUEST_PASSWORD"
-        press ret
-      fi
+      answer_luks_prompt "$(ocr_screen)" logo_screens boot-luks-prompt || true
     fi
 
     if ((SECONDS - started >= timeout)); then
@@ -778,6 +805,7 @@ installed_system_started() {
 # first boot is what is being waited for.
 wait_for_unattended_install() {
   local prefix="$1" serial_log="${2:-}"
+  # shellcheck disable=SC2034 # answer_luks_prompt counts in blank_screens
   local waited=0 text progress_name blank_screens=0 first_boot_at=""
 
   log "Waiting for the unattended install to finish (timeout ${INSTALL_TIMEOUT}s)"
@@ -799,40 +827,11 @@ wait_for_unattended_install() {
     text=$(ocr_screen)
 
     # An encrypted install reboots into a passphrase prompt, which nothing
-    # else in an unattended run is there to answer. The wording is the
-    # initramfs encrypt hook's: "A password is required to access the root
-    # volume:".
-    if [[ $ENCRYPT == true ]] &&
-      grep -qiE "password is required|enter passphrase|unlocking" <<<"$text"; then
-      capture_console "success-install-luks-prompt"
-      type_text "$GUEST_PASSWORD"
-      press ret
+    # else in an unattended run is there to answer.
+    if [[ $ENCRYPT == true ]] && answer_luks_prompt "$text" blank_screens install-luks-prompt; then
       sleep 10
       ((waited += 10))
       continue
-    fi
-
-    # A BIOS install boots the mkinitcpio initramfs, whose LUKS prompt is
-    # Plymouth's lock field under the logo: OCR reads the logo ("OMARCHY",
-    # or "OMARCHS" at this size) and nothing else. Once an encrypted run has
-    # shown nothing but the logo for two samples in a row, nothing but that
-    # prompt is listening to the keyboard, so type the passphrase blind. The
-    # installer's dashboard always carries more text ("Installing Omarchy",
-    # the tip line); the splash between the reboot and the prompt discards
-    # keystrokes.
-    local screen_words=${text//[^[:alpha:]]/}
-    if [[ $ENCRYPT == true && ${screen_words,,} =~ ^(omarch[a-z]{0,2})?$ ]]; then
-      if ((++blank_screens >= 2)); then
-        capture_console "success-install-luks-prompt-blind"
-        type_text "$GUEST_PASSWORD"
-        press ret
-        blank_screens=0
-        sleep 10
-        ((waited += 10))
-        continue
-      fi
-    else
-      blank_screens=0
     fi
 
     if grep -qi "Reboot Now" <<<"$text"; then

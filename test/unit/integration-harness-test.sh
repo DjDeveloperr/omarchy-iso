@@ -44,12 +44,14 @@ capture_console() { :; }
 type_text() { :; }
 press() { echo "$1" >>"$work/pressed"; }
 # Time passes only in sleep, and is kept in a file because the functions
-# run in a subshell. A loop that sleeps far past its budget is stopped here
-# instead of hanging the test.
+# run in a subshell; SECONDS moves with it for the waits that read the
+# clock. A loop that sleeps far past its budget is stopped here instead of
+# hanging the test.
 sleep() {
   local slept
   slept=$(($(<"$work/slept") + ${1%.*}))
   echo "$slept" >"$work/slept"
+  SECONDS=$((SECONDS + ${1%.*}))
   ((slept <= 100000)) || { echo "still waiting after ${slept}s" >&2; exit 99; }
 }
 echo 0 >"$work/slept"
@@ -85,15 +87,17 @@ echo "ok - a console login whose password prompt never shows is retried on the n
 # An encrypted BIOS install whose Plymouth prompt is typed into blind, sample
 # after sample, still times out after INSTALL_TIMEOUT, not later.
 
-take wait_for_unattended_install
+take wait_for_unattended_install answer_luks_prompt
 ENCRYPT=true
 INSTALL_TIMEOUT=600
 ssh_guest() { false; }
 ocr_screen() { echo "OMARCHY"; } # the logo and nothing else, for ever
 
 echo 0 >"$work/slept"
+: >"$work/pressed"
 run wait_for_unattended_install install
 slept=$(<"$work/slept")
+grep -qx ret "$work/pressed" || fail "the passphrase was never typed at the logo"
 ((status == 1)) || fail "a boot stuck at the logo did not time out (status $status): $(tail -n3 "$work/out")"
 grep -q "Timed out after ${INSTALL_TIMEOUT}s" "$work/out" || fail "no timeout message: $(tail -n3 "$work/out")"
 ((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s"
@@ -104,8 +108,10 @@ echo "ok - typing the passphrase blind counts against the install timeout"
 ocr_screen() { echo "A password is required to access the root volume:"; }
 
 echo 0 >"$work/slept"
+: >"$work/pressed"
 run wait_for_unattended_install install
 slept=$(<"$work/slept")
+grep -qx ret "$work/pressed" || fail "the passphrase was never typed at the prompt"
 ((status == 1)) || fail "a refused passphrase did not time out (status $status): $(tail -n3 "$work/out")"
 ((slept <= INSTALL_TIMEOUT + 10)) || fail "a ${INSTALL_TIMEOUT}s budget took ${slept}s at the passphrase prompt"
 echo "ok - typing at the passphrase prompt counts against the install timeout"
@@ -178,3 +184,29 @@ run drive_first_boot
 grep -qx shift-2 "$work/pressed" || fail "the email's @ was not typed as us after the keyboard step: $(paste -sd' ' "$work/pressed")"
 ! grep -qx shift-apostrophe "$work/pressed" || fail "the email's @ was typed on its uk key after the form loaded us"
 echo "ok - the factory first boot is typed into as us after its keyboard step"
+
+# ------------------------------------------- the boot wait unlocks the disk
+#
+# Every boot of an encrypted install stops at the LUKS prompt, scenario
+# overlays included. An initramfs built on the machine (BIOS, or a layout
+# the pre-built UKI lacks) asks with Plymouth's lock field, which OCR reads
+# as the logo and nothing else; wait_for_ssh types into it as the install
+# wait does, and not into a booted console.
+
+take wait_for_ssh answer_luks_prompt type_text
+ENCRYPT=true KB_LAYOUT=uk TYPE_LAYOUT=uk
+ssh_guest() { [[ $(paste -sd' ' "$work/pressed") == *"o m a r c h y ret"* ]]; }
+for screen in "OMARCHY" "A password is required to access the root volume:"; do
+  ocr_screen() { echo "$screen"; }
+  : >"$work/pressed"
+  run wait_for_ssh 300
+  ((status == 0)) || fail "a boot at the prompt reading \"$screen\" was not unlocked: $(tail -n3 "$work/out")"
+done
+echo "ok - wait_for_ssh types the passphrase at a logo-only prompt and a readable one"
+
+ocr_screen() { echo "omarchy-test login:"; }
+: >"$work/pressed"
+run wait_for_ssh 60
+((status == 1)) || fail "a booted console without SSH did not time out (status $status): $(tail -n3 "$work/out")"
+[[ ! -s $work/pressed ]] || fail "wait_for_ssh typed into a booted console: $(paste -sd' ' "$work/pressed")"
+echo "ok - wait_for_ssh types nothing into a booted console"
