@@ -81,4 +81,17 @@ report "bios reports its own -bios-bios folder" bios "--bios" "" "-bios-bios"
 report "a keyboard variant reports its -kb folder" encrypted-kb-uk "" \
   "OMARCHY_INTEGRATION_ENCRYPT=true OMARCHY_INTEGRATION_KB_LAYOUT=uk" "-encrypted-kb-uk-kbuk" "-bios-encrypted-kb-uk-kbuk"
 
+# A variant that runs no everyday boot (usb2-4g runs only noop) leaves no
+# -boot folder; the step still succeeds and reports the install.
+dir="$work/no-boot"
+mkdir -p "$dir/test-runs"
+install_dir "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g"
+rm -rf "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g/runs"
+if (cd "$dir" && VARIANT=usb2-4g OPTIONS="" VARIANT_ENV="" GITHUB_STEP_SUMMARY="$dir/summary" \
+  bash -euo pipefail -c "$script" >/dev/null 2>&1) && grep -qF "**Install:** 312.4 s" "$dir/summary"; then
+  echo "ok: an install without an everyday boot still reports"
+else
+  echo "FAIL: an install without an everyday boot fails the report step"; fails=1
+fi
+
 ((fails == 0))

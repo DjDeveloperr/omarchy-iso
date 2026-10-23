@@ -143,7 +143,9 @@ jobs:
             release/*.iso
             test-runs/build-seconds
           compression-level: 0
-          retention-days: 1
+          # A public repository's artifacts cost nothing to keep; a week lets
+          # "Re-run failed jobs" find the ISO a successful build left.
+          retention-days: 7
 
   install:
     name: "x86_64: ${{ matrix.variant }}"
@@ -293,7 +295,7 @@ jobs:
               echo "**First boot:** $(boot "$base/first-boot-systemd-analyze.txt")"
               echo
             fi
-            boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1)
+            boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1 || true)
             if [ -n "$boot_dir" ] && [ -f "$boot_dir/systemd-analyze.txt" ]; then
               echo "**Everyday boot:** $(boot "$boot_dir/systemd-analyze.txt")"
               echo
@@ -395,7 +397,7 @@ jobs:
               echo "**First boot:** $(boot "$base/first-boot-systemd-analyze.txt")"
               echo
             fi
-            boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1)
+            boot_dir=$(ls -d "$base"/runs/*-boot 2>/dev/null | tail -1 || true)
             if [ -n "$boot_dir" ] && [ -f "$boot_dir/systemd-analyze.txt" ]; then
               echo "**Everyday boot:** $(boot "$boot_dir/systemd-analyze.txt")"
               echo
