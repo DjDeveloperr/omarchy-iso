@@ -952,7 +952,17 @@ echo "Shipping $shipped_count of $mirror_count mirror packages; the root image p
 # per-machine packages an install pacstraps from it are read off the medium
 # like the root image, and a corrupt one would otherwise surface as a pacman
 # error after the disk is gone. Its repo db rides along; pacman reads it too.
-mirror_files() { cat "$shipped_list"; echo offline.db.tar.gz; }
+# So does every package's signature: on aarch64 validate_boot checks the
+# target keyring against archlinuxarm-keyring's, after the disk is written
+# (on x86_64 about 120 files, 32 KB in all).
+mirror_files() {
+  local file
+  while IFS= read -r file; do
+    echo "$file"
+    [[ ! -f $file.sig ]] || echo "$file.sig"
+  done <"$shipped_list"
+  echo offline.db.tar.gz
+}
 mirror_sums="$build_cache_dir/airootfs/usr/share/omarchy-iso/offline-mirror.sha256"
 (cd "$offline_mirror_dir" && mirror_files | xargs -d '\n' sha256sum) >"$mirror_sums"
 mirror_bytes=$(cd "$offline_mirror_dir" && mirror_files | xargs -d '\n' stat -L -c %s | awk '{ s += $1 } END { print s }')
