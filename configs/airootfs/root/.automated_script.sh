@@ -86,12 +86,15 @@ warm_offline_mirror() {
   budget_kb=$(($(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo) / 2))
   ((budget_kb > 262144)) || return 0
 
-  # omarchy-root-image-verify.service (started at boot) reads the whole image
-  # front to back as it hashes it, and two readers on one USB stick seek
-  # against each other: let it finish first. Its pass is the warm-up for the
-  # image too; the head read below is then a cache hit where the image fit,
-  # and re-warms the front where a small budget made the kernel drop it.
-  while [[ $(systemctl is-active omarchy-root-image-verify.service 2>/dev/null) == activating ]]; do
+  # omarchy-mirror-verify.service and then omarchy-root-image-verify.service
+  # (started at boot) read the shipped mirror and the whole image as they hash
+  # them, and two readers on one USB stick seek against each other: let both
+  # finish first, whatever their verdict. Wait on their start jobs, not on
+  # is-active: while the mirror is hashed the image's job is queued behind it
+  # (Before=) and that unit still reads inactive. The image's pass is the
+  # warm-up for the image too; the read below then keeps it cached.
+  while [[ -n $(systemctl list-jobs --no-legend omarchy-mirror-verify.service \
+    omarchy-root-image-verify.service 2>/dev/null) ]]; do
     sleep 1
   done
 
