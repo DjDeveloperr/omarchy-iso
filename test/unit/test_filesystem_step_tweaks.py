@@ -3,11 +3,16 @@
 It runs against stand-ins that record what it does to them: mkfs.btrfs gets -K
 only when the filesystem is a throwaway, every other filesystem and every
 other case is left alone, each piece is timed, and the patched names are put
-back exactly, also when the step raises.
+back exactly, also when the step raises. parted's commit is followed by a
+settle and a wait for the disk's partition nodes, which udevd's re-read of
+the new table removes and adds back while archinstall is about to wipefs them.
 """
 
 import os
+import re
 import sys
+import tempfile
+import threading
 import types
 import unittest
 from contextlib import contextmanager
@@ -49,10 +54,40 @@ def _udev_sync():
     return None
 
 
-class FilesystemStepTweaks(unittest.TestCase):
-    def load(self, steps):
+class Disk:
+    """parted.Disk: commit() writes the table, and the re-read it sets off
+    removes the partition nodes and creates them again reread seconds
+    later (never, with None)."""
+
+    def __init__(self, device, nodes, reread=0.3):
+        self.device = types.SimpleNamespace(path=device)
+        self.partitions = [types.SimpleNamespace(path=str(node)) for node in nodes]
+        self.reread, self.rereads = reread, []
+
+    def commit(self):
+        for partition in self.partitions:
+            Path(partition.path).unlink(missing_ok=True)
+        if self.reread is not None:
+            timer = threading.Timer(self.reread, lambda: [Path(p.path).touch() for p in self.partitions])
+            timer.start()
+            self.rereads.append(timer)
+        return True
+
+
+def archinstall_partition(disk):
+    """The end of archinstall's device_handler.partition(): commit, then
+    wipefs every new partition."""
+    disk.commit()
+    for partition in disk.partitions:
+        if not Path(partition.path).exists():
+            raise RuntimeError(f"wipefs: error: {partition.path}: probing initialization failed: No such file or directory")
+
+
+class StepTest(unittest.TestCase):
+    def load(self, steps, udev_sync=_udev_sync):
         """The adapter's wrapper, with a device handler that records its
-        calls and a step timer that records its labels in steps."""
+        calls, a step timer that records its labels in steps, and udev_sync
+        as archinstall's udevadm settle."""
         handler = DeviceHandler()
         # luks_tuning replaces Luks2's methods when the adapter loads; here
         # Luks2 is the stand-in the wrapper is observed on.
@@ -66,23 +101,30 @@ class FilesystemStepTweaks(unittest.TestCase):
                 steps.append(label)
 
         arch = self.enterContext(adapter({
-            "archinstall.lib.disk.device_handler": {"device_handler": handler, "udev_sync": _udev_sync},
-            "archinstall.lib.disk.filesystem": {"udev_sync": _udev_sync},
+            "archinstall.lib.disk.device_handler": {"device_handler": handler, "udev_sync": udev_sync},
+            "archinstall.lib.disk.filesystem": {"udev_sync": udev_sync},
             "archinstall.lib.disk.luks": {"Luks2": Luks2},
             "archinstall.lib.models.device": {"FilesystemType": FilesystemType},
         }))
         phases = types.ModuleType("orchestrator.phases_impl")
         phases._time_step = time_step
-        self.enterContext(mock.patch.dict(sys.modules, {"orchestrator.phases_impl": phases}))
+        self.enterContext(mock.patch.dict(sys.modules, {
+            "orchestrator.phases_impl": phases,
+            "parted": types.SimpleNamespace(Disk=Disk),
+        }))
         self.enterContext(mock.patch.object(arch, "info", steps.append))
         return (arch._filesystem_step_tweaks, handler,
                 sys.modules["archinstall.lib.disk.device_handler"], sys.modules["archinstall.lib.disk.filesystem"])
+
+
+class FilesystemStepTweaks(StepTest):
 
     def run_step(self, throwaway, body=None):
         steps = []
         tweaks, handler, dh_module, fs_module = self.load(steps)
         settle_before = (dh_module.udev_sync, fs_module.udev_sync)
         luks_before = (Luks2.__dict__["encrypt"], Luks2.__dict__["unlock"])
+        commit_before = Disk.__dict__["commit"]
         try:
             with tweaks(throwaway):
                 handler.partition("disk")
@@ -98,6 +140,7 @@ class FilesystemStepTweaks(unittest.TestCase):
             self.assertNotIn("partition", vars(handler))
             self.assertEqual(settle_before, (dh_module.udev_sync, fs_module.udev_sync))
             self.assertEqual(luks_before, (Luks2.__dict__["encrypt"], Luks2.__dict__["unlock"]))
+            self.assertIs(commit_before, Disk.__dict__["commit"], "parted.Disk.commit was left wrapped")
         return steps, handler.calls
 
     def test_throwaway_btrfs_is_made_without_the_whole_device_trim(self):
@@ -121,6 +164,61 @@ class FilesystemStepTweaks(unittest.TestCase):
             raise RuntimeError("parted lost a race")
         with self.assertRaises(RuntimeError):
             self.run_step(True, boom)
+
+
+class PartitionNodesAfterCommit(StepTest):
+    """udevd re-reads the table parted just wrote, dropping and adding back
+    every partition; archinstall must not wipefs into that gap."""
+
+    def setUp(self):
+        self.dev = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.nodes = [self.dev / "vda1", self.dev / "vda2"]
+        for node in self.nodes:
+            node.touch()
+
+    def partition(self, disk, udev_sync=_udev_sync):
+        steps = []
+        tweaks = self.load(steps, udev_sync)[0]
+        try:
+            with tweaks(False):
+                archinstall_partition(disk)
+        finally:
+            for timer in disk.rereads:
+                timer.cancel()
+        return steps
+
+    def test_wipefs_waits_for_the_nodes_the_reread_adds_back(self):
+        disk = Disk(str(self.dev), self.nodes, reread=0.3)
+        self.partition(disk)
+        self.assertTrue(all(node.exists() for node in self.nodes))
+
+    def test_udevadm_settle_runs_after_the_commit(self):
+        disk = Disk(str(self.dev), self.nodes, reread=0.3)
+        settled = []
+
+        def settle():
+            # The real settle returns once udevd's re-read is done.
+            for timer in disk.rereads:
+                timer.join()
+            settled.append(all(node.exists() for node in self.nodes))
+
+        self.partition(disk, settle)
+        self.assertEqual(settled, [True])
+
+    def test_nodes_that_never_appear_fail_the_step_by_name(self):
+        disk = Disk(str(self.dev), self.nodes, reread=None)
+        commit = Disk.__dict__["commit"]
+        tweaks = self.load([])[0]
+        message = f"{self.dev}/vda1, {self.dev}/vda2 did not appear within 0.2s"
+        with self.assertRaisesRegex(RuntimeError, re.escape(message)):
+            with mock.patch("orchestrator.archinstall_adapter.PARTITION_NODES_TIMEOUT", 0.2), tweaks(False):
+                archinstall_partition(disk)
+        self.assertIs(Disk.__dict__["commit"], commit, "parted.Disk.commit was left wrapped")
+
+    def test_commit_is_restored_after_the_step(self):
+        commit = Disk.__dict__["commit"]
+        self.partition(Disk(str(self.dev), self.nodes, reread=0.05))
+        self.assertIs(Disk.__dict__["commit"], commit)
 
 
 if __name__ == "__main__":

@@ -66,7 +66,8 @@ from .ui import info
 
 # The archinstall this adapter is written and tested against. luks_tuning and
 # _filesystem_step_tweaks replace archinstall internals (Luks2's methods, the
-# device handler's), and install_base_delta calls private Installer methods;
+# device handler's, and parted's Disk.commit, which archinstall calls), and
+# install_base_delta calls private Installer methods;
 # none of that is a stable API. The ISO pins archinstall in its offline
 # mirror, so another version means the ISO build picked up a new release:
 # stop at startup and say so, before a replaced internal misbehaves in the
@@ -129,6 +130,10 @@ def make_mirror_handler(offline: bool = True) -> MirrorListHandler:
     return MirrorListHandler(offline=offline, verbose=False)
 
 
+# How long a committed partition table may take to show up as device nodes.
+PARTITION_NODES_TIMEOUT = 10.0
+
+
 @contextmanager
 def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
     """Time the pieces of archinstall's filesystem step, and keep mkfs.btrfs
@@ -147,11 +152,22 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
     system keeps fstrim.timer enabled, and btrfs discards freed space on its
     own. Nothing else about the step changes.
 
+    archinstall's partition() runs wipefs on each new partition the moment
+    parted's commit returns. parted closing the disk after writing the table
+    makes udevd re-read it (BLKRRPART, from its inotify watch on the disk),
+    which drops every partition and adds them back. When the re-read gets
+    there before wipefs opens the partition, wipefs finds no /dev/vda1
+    ("probing initialization failed: No such file or directory"); that
+    failed about half of CI's BIOS installs. So the commit is followed by
+    udevadm settle, which waits for the re-read, and then by a wait for every
+    partition node of the disk.
+
     Everything here is best effort. If archinstall moves one of these names
     the step runs exactly as before, untimed and with the TRIM."""
     try:
         import archinstall.lib.disk.device_handler as dh_module
         import archinstall.lib.disk.filesystem as fs_module
+        import parted
         from archinstall.lib.disk.luks import Luks2
         from archinstall.lib.models.device import FilesystemType
         from .phases_impl import _time_step
@@ -163,6 +179,7 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
 
     instance_patches: list[str] = []
     luks_originals: dict[str, object] = {}
+    commit_original = None
     settle = {"calls": 0, "seconds": 0.0}
     settle_originals: dict[object, object] = {}
 
@@ -202,6 +219,22 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
                 settle["seconds"] += time.monotonic() - started
         return wrapper
 
+    def commit_wrapper(original):
+        def wrapper(disk, *args, **kwargs):
+            result = original(disk, *args, **kwargs)
+            dh_module.udev_sync()
+            nodes = [Path(partition.path) for partition in disk.partitions]
+            deadline = time.monotonic() + PARTITION_NODES_TIMEOUT
+            while missing := [str(node) for node in nodes if not node.exists()]:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"partition table on {disk.device.path} written, but {', '.join(missing)} "
+                        f"did not appear within {PARTITION_NODES_TIMEOUT:g}s"
+                    )
+                time.sleep(0.05)
+            return result
+        return wrapper
+
     try:
         for name, label in (("partition", "FS.partition"), ("create_btrfs_volumes", "FS.create_btrfs_subvolumes")):
             original = getattr(device_handler, name, None)
@@ -221,6 +254,9 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
             if callable(getattr(module, "udev_sync", None)):
                 settle_originals[module] = module.udev_sync
                 module.udev_sync = settle_wrapper(module.udev_sync)
+        if callable(parted.Disk.__dict__.get("commit")) and callable(getattr(dh_module, "udev_sync", None)):
+            commit_original = parted.Disk.__dict__["commit"]
+            parted.Disk.commit = commit_wrapper(commit_original)
         yield
     finally:
         for name in instance_patches:
@@ -230,6 +266,8 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
                 pass
         for name, function in luks_originals.items():
             setattr(Luks2, name, function)
+        if commit_original is not None:
+            parted.Disk.commit = commit_original
         for module, function in settle_originals.items():
             module.udev_sync = function
         if settle["seconds"] >= 0.05:
