@@ -19,8 +19,15 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 answers=$(sed -n '/^# --- answers/,/^ISO=\$iso detect_packages$/p' "$script" | sed '$d')
 [[ -n $answers ]] || fail "arm64-install has no answers block before detect_packages"
 
+# What only the image needs: CI's unit container has no mtools or dosfstools.
+mkdir -p "$work/bin"
+printf '#!/bin/sh\nexit 0\n' >"$work/bin/mkfs.vfat"
+printf '#!/bin/sh\nexit 0\n' >"$work/bin/mcopy"
+chmod +x "$work/bin/mkfs.vfat" "$work/bin/mcopy"
+
 (
   set -u
+  PATH="$work/bin:$PATH"
   state=$work iso=/nonexistent.iso
   eval "$answers"
   RUNTIME_PACKAGE=omarchy SETTINGS_PACKAGE=omarchy-settings
