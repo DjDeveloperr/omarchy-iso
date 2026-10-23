@@ -129,11 +129,16 @@ jobs:
           fi
           mkdir -p test-runs && echo $(( $(date +%s) - start )) >test-runs/build-seconds
 
-      # Already compressed, and only the jobs below read it.
+      # Already compressed, and only the jobs below read it. Named without
+      # the attempt: "Re-run failed jobs" does not run a passed build again,
+      # and the install jobs it does rerun fetch the ISO the earlier attempt
+      # uploaded. A build that runs again replaces its ISO, as a name is
+      # unique within a run.
       - name: Hand the ISO to the install jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          name: iso-${{ github.run_id }}-${{ matrix.arch }}
+          overwrite: true
           path: |
             release/*.iso
             test-runs/build-seconds
@@ -192,7 +197,7 @@ jobs:
       - name: Fetch the ISO
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-x86_64
+          name: iso-${{ github.run_id }}-x86_64
 
       # The harness runs in an Arch container: Arch's current QEMU and OVMF
       # (QEMU 11) instead of the runner's older one, at the paths the
@@ -343,7 +348,7 @@ jobs:
       - name: Fetch the ISO
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: iso-${{ github.run_id }}-${{ github.run_attempt }}-aarch64
+          name: iso-${{ github.run_id }}-aarch64
 
       # The same on aarch64, by its own tests, in the image the ISO is built
       # in: first the live ISO to its installer, then the install.
