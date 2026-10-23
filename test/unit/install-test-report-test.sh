@@ -5,8 +5,8 @@
 # base-test.sh saves in that install's base folder. A job can leave more than
 # one base folder behind — pxe-test.sh forces BIOS, so a job running every
 # scenario also gets a -bios one with no install numbers in it. This runs the
-# step's own script against fake test-runs trees and checks it reports from
-# the install's folder.
+# step's own script against fake test-runs trees, with base-test.sh's names
+# for them, and checks it reports from the install's folder.
 
 set -euo pipefail
 
@@ -74,20 +74,23 @@ report() { # desc, variant, options, variant env, install folder suffix, [pxe fo
 }
 
 report "default reports its install, not the PXE run's -bios folder" default "" "" "" "-bios"
-report "encrypted reports its install, not the PXE run's -bios-encrypted folder" \
-  encrypted "" "OMARCHY_INTEGRATION_ENCRYPT=true" "-encrypted" "-bios-encrypted"
+report "encrypted reports its install, not the PXE run's -bios-encrypted-luks folder" \
+  encrypted "" "OMARCHY_INTEGRATION_ENCRYPT=true" "-encrypted-luks" "-bios-encrypted-luks"
 # --bios: the PXE run, if any, shares the install's own folder.
 report "bios reports its own -bios-bios folder" bios "--bios" "" "-bios-bios"
 report "a keyboard variant reports its -kb folder" encrypted-kb-uk "" \
-  "OMARCHY_INTEGRATION_ENCRYPT=true OMARCHY_INTEGRATION_KB_LAYOUT=uk" "-encrypted-kb-uk-kbuk" "-bios-encrypted-kb-uk-kbuk"
+  "OMARCHY_INTEGRATION_ENCRYPT=true OMARCHY_INTEGRATION_KB_LAYOUT=uk" "-encrypted-kb-uk-kbuk-luks" "-bios-encrypted-kb-uk-kbuk-luks"
+report "a small disk reports its -24g folder" small-disk "" "OMARCHY_INTEGRATION_DISK_GB=24" "-small-disk-24g"
+report "the UKI variant reports its -uki folder" uki "" "OMARCHY_INTEGRATION_UKI=true" "-uki-uki"
 
 # A variant that runs no everyday boot (usb2-4g runs only noop) leaves no
 # -boot folder; the step still succeeds and reports the install.
 dir="$work/no-boot"
 mkdir -p "$dir/test-runs"
-install_dir "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g"
-rm -rf "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g/runs"
-if (cd "$dir" && VARIANT=usb2-4g OPTIONS="" VARIANT_ENV="" GITHUB_STEP_SUMMARY="$dir/summary" \
+install_dir "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g-luks"
+rm -rf "$dir/test-runs/omarchy-9.9.9-integration-usb2-4g-luks/runs"
+if (cd "$dir" && VARIANT=usb2-4g OPTIONS="" GITHUB_STEP_SUMMARY="$dir/summary" \
+  VARIANT_ENV="OMARCHY_INTEGRATION_ENCRYPT=true OMARCHY_ISO_THROTTLE_BPS=31457280" \
   bash -euo pipefail -c "$script" >/dev/null 2>&1) && grep -qF "**Install:** 312.4 s" "$dir/summary"; then
   echo "ok: an install without an everyday boot still reports"
 else

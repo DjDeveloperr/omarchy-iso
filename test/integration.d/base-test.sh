@@ -71,6 +71,10 @@ kb_layout_typeable() {
 kb_layout_typeable "$KB_LAYOUT" || exit 1
 TYPE_LAYOUT=$KB_LAYOUT
 
+# Every setting that changes what is installed names the base folder, so
+# --reuse-base never boots an install made another way; with the defaults
+# it is the plain name, which the nightly and upgrade workflows look for.
+# install-test.yml's "Report times" step names it the same way.
 BASE_DIR="$ROOT/test-runs/$(basename "$ISO" .iso)-integration"
 if [[ $FIRMWARE == bios ]]; then
   BASE_DIR+="-bios"
@@ -80,6 +84,15 @@ if [[ $VARIANT != default ]]; then
 fi
 if [[ $KB_LAYOUT != us ]]; then
   BASE_DIR="$BASE_DIR-kb$KB_LAYOUT"
+fi
+if [[ $ENCRYPT == true ]]; then
+  BASE_DIR+="-luks"
+fi
+if [[ $UKI == true ]]; then
+  BASE_DIR+="-uki"
+fi
+if [[ $DISK_GB != 40 ]]; then
+  BASE_DIR+="-${DISK_GB}g"
 fi
 RUN_DIR="$BASE_DIR/runs/$(date +%Y%m%d-%H%M%S)-$SCENARIO"
 BASE_DISK="$BASE_DIR/base.qcow2"

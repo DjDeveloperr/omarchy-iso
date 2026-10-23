@@ -274,11 +274,14 @@ jobs:
           # The variant's own install folder, named the way base-test.sh
           # names it. A job running every scenario also leaves pxe-test.sh's
           # -bios one, which can sort first and holds no install numbers.
-          firmware=uefi kb=us
+          firmware=uefi kb=us encrypt=false uki=false disk_gb=40
           for setting in $VARIANT_ENV; do
             case $setting in
               OMARCHY_INTEGRATION_FIRMWARE=*) firmware=${setting#*=} ;;
               OMARCHY_INTEGRATION_KB_LAYOUT=*) kb=${setting#*=} ;;
+              OMARCHY_INTEGRATION_ENCRYPT=*) encrypt=${setting#*=} ;;
+              OMARCHY_INTEGRATION_UKI=*) uki=${setting#*=} ;;
+              OMARCHY_INTEGRATION_DISK_GB=*) disk_gb=${setting#*=} ;;
             esac
           done
           for option in $OPTIONS; do [ "$option" != --bios ] || firmware=bios; done
@@ -286,6 +289,9 @@ jobs:
           [ "$firmware" != bios ] || suffix+=-bios
           [ "$VARIANT" = default ] || suffix+="-$VARIANT"
           [ "$kb" = us ] || suffix+="-kb$kb"
+          [ "$encrypt" != true ] || suffix+=-luks
+          [ "$uki" != true ] || suffix+=-uki
+          [ "$disk_gb" = 40 ] || suffix+="-${disk_gb}g"
           base=$(ls -d test-runs/*-integration"$suffix" 2>/dev/null | head -1)
           boot() { head -1 "$1" | sed -E 's/in [^+]*\(firmware\) \+ /in /; s/ *=.*//'; }
           [ -n "$base" ] || { echo "No test run to report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
