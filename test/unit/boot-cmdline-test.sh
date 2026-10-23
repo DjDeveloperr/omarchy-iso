@@ -47,13 +47,21 @@ if grep -rhE '^[^#]*cms_verify' configs/syslinux configs/grub configs/efiboot | 
   exit 1
 fi
 
+# The live initramfs unpacks into the kernel's rootfs tmpfs, which mounts with
+# half of RAM unless initramfs_options says otherwise: linux-omarchy's unpacks
+# to 149 MB, more than the 146 MB that leaves at 512 MB, and the boot falls
+# into a rescue shell behind the splash ("Initramfs unpacking failed").
 fail=0
 while IFS= read -r line; do
   if ! grep -qE '(^|[[:space:]])copytoram=n([[:space:]]|$)' <<<"$line"; then
     echo "boot entry without copytoram=n: $line"
     fail=1
   fi
+  if ! grep -qE '(^|[[:space:]])initramfs_options=size=90%([[:space:]]|$)' <<<"$line"; then
+    echo "boot entry without initramfs_options=size=90%: $line"
+    fail=1
+  fi
 done <<<"$entries"
 
-[ "$fail" -eq 0 ] && echo "ok: $count boot entries pin copytoram=n"
+[ "$fail" -eq 0 ] && echo "ok: $count boot entries pin copytoram=n and initramfs_options=size=90%"
 exit "$fail"
