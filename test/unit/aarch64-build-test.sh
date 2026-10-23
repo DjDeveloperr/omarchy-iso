@@ -193,6 +193,33 @@ installable=$(
 [[ $installable == 'alarm-only-1.0-1-aarch64.pkg.tar.zst bundle-only-1.0-1-aarch64.pkg.tar.zst' ]] \
   || fail "an aarch64 build looks up what it ships in other repositories than it downloaded from: '$installable'"
 
+# The boot-time mirror check (omarchy-mirror-verify.service) runs the
+# builder's checksum list before anything formats a disk. validate_boot reads
+# archlinuxarm-keyring's signature off the shipped mirror after the image is
+# written, so a damaged signature has to fail that check, not the finished
+# install. The builder's own list, over a shipped mirror whose keyring
+# signature is then damaged.
+sums_block=$(sed -n '/^mirror_files() {/,/sha256sum) >"\$mirror_sums"$/p' "$ROOT/builder/build-iso.sh")
+[[ -n $sums_block ]] || fail "the builder no longer checksums the shipped mirror"
+shipped_mirror=$fixture/shipped-mirror
+mkdir -p "$shipped_mirror" "$fixture/sums-cache/airootfs/usr/share/omarchy-iso"
+for file in archlinuxarm-keyring-20240419-1-any.pkg.tar.xz{,.sig} linux-firmware-1-1-any.pkg.tar.zst{,.sig} \
+  omarchy-local-1-1-any.pkg.tar.zst offline.db.tar.gz; do
+  echo "$file" >"$shipped_mirror/$file"
+done
+printf '%s\n' archlinuxarm-keyring-20240419-1-any.pkg.tar.xz linux-firmware-1-1-any.pkg.tar.zst \
+  omarchy-local-1-1-any.pkg.tar.zst >"$fixture/shipped.list"
+(
+  offline_mirror_dir=$shipped_mirror shipped_list=$fixture/shipped.list build_cache_dir=$fixture/sums-cache
+  eval "$sums_block"
+) || fail "the builder's mirror checksum list did not run"
+shipped_sums=$fixture/sums-cache/airootfs/usr/share/omarchy-iso/offline-mirror.sha256
+(cd "$shipped_mirror" && sha256sum --check --strict --quiet "$shipped_sums") \
+  || fail "an intact shipped mirror fails its own checksums"
+echo damaged >>"$shipped_mirror/archlinuxarm-keyring-20240419-1-any.pkg.tar.xz.sig"
+(cd "$shipped_mirror" && sha256sum --check --strict --quiet "$shipped_sums") >/dev/null 2>&1 \
+  && fail "a damaged archlinuxarm-keyring signature passes the boot-time mirror check"
+
 # --- one image for every board ------------------------------------------------
 # linux-omarchy and nothing else, and nothing that asks which board the image
 # is for.
