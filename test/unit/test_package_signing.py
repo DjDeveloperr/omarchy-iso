@@ -52,6 +52,34 @@ class TargetKeyringTest(unittest.TestCase):
         self.assertNotIn("archlinuxarm", script)
 
 
+class KeyringBeforeSystemFinalizerTest(unittest.TestCase):
+    # On aarch64 the runtime's own post-install initialises and populates the
+    # target keyring; two pacman-keys on one gnupg dir corrupt it, so the
+    # unit must have finished when omarchy-apply-system starts.
+    def pending_at_finalizer(self, machine):
+        ctx = mock.Mock()
+        ctx.defer_provisioning = False
+        ctx.username = "omarchy"
+        ctx.target = Path("/mnt")
+        proc = mock.Mock(returncode=0)
+        proc.communicate.return_value = ("", None)
+        ctx.state = {"target_keyring_proc": proc}
+        seen = []
+        with mock.patch.object(phases_impl.platform, "machine", return_value=machine), \
+                mock.patch.object(phases_impl, "_mask_mkinitcpio_pacman_hooks"), \
+                mock.patch.object(phases_impl, "_unmask_mkinitcpio_pacman_hooks"), \
+                mock.patch.object(phases_impl, "_run_target_setup_command",
+                                  lambda ctx, cmd: seen.append("target_keyring_proc" in ctx.state)):
+            phases_impl.run_system_finalizer(ctx)
+        return seen
+
+    def test_aarch64_joins_the_keyring_unit_first(self):
+        self.assertEqual(self.pending_at_finalizer("aarch64"), [False])
+
+    def test_x86_64_keeps_it_running_alongside(self):
+        self.assertEqual(self.pending_at_finalizer("x86_64"), [True])
+
+
 @unittest.skipUnless(shutil.which("gpg") and shutil.which("gpgconf"), "needs GnuPG")
 class PackageSigningTest(unittest.TestCase):
     """Real GnuPG: a throwaway build key signs a fake keyring package, and the
