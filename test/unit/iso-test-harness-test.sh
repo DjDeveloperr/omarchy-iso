@@ -120,3 +120,36 @@ set -e
 grep -q "syntax error" "$work/err" || fail "the iasl error is hidden: $(cat "$work/err")"
 
 echo "ok - fake ACPI devices bring iasl with them and show its errors"
+
+# ------------------------------------------- --reuse-base and fake hardware
+#
+# The fake hardware changes what the install does (packages, kernel, boot
+# configuration), so --reuse-base must not boot an image installed with other
+# hardware, or none: each hardware setting gets its own base image, and the
+# same setting finds its own again.
+
+# The naming is the top-level block from BASE_NAME= to BASE_DIR=.
+naming=$(sed -n '/^BASE_NAME="/,/^BASE_DIR=/p' "$harness")
+[[ -n $naming ]] || fail "the harness no longer names its base image with BASE_NAME"
+base_name() { # [VAR=value | VAR+=(value)]...
+  ISO="$work/omarchy.iso" KEYBOARD_LABEL="English (US)" REPO_DIR="$work"
+  ENCRYPT=false PROVISION=false FREE_SPACE=false
+  FAKE_PCI=() SMBIOS=() CPU_ID="" BATTERY=false ACPI_HIDS=() NO_NETWORK=false
+  local setting
+  for setting; do eval "$setting"; done
+  eval "$naming"
+  echo "$BASE_NAME"
+}
+
+[[ $(base_name) == omarchy ]] || fail "the plain install's base image moved to $(base_name), so existing ones are not reused"
+declare -A seen=([$(base_name)]="no fake hardware")
+for setting in "FAKE_PCI+=(106b:1802:088000)" "FAKE_PCI+=(10de:2684:030000)" \
+  "SMBIOS+=('manufacturer=Framework,,product=Laptop 16')" "CPU_ID=vendor=GenuineIntel,model=170" \
+  "BATTERY=true" "ACPI_HIDS+=(OVTI08F4)" "NO_NETWORK=true"; do
+  name=$(base_name "$setting")
+  [[ ! -v seen[$name] ]] || fail "$setting reuses the base image of ${seen[$name]} ($name)"
+  seen[$name]=$setting
+  [[ $(base_name "$setting") == "$name" ]] || fail "$setting does not find its own base image again"
+done
+
+echo "ok - each fake hardware setting installs and reuses its own base image"
