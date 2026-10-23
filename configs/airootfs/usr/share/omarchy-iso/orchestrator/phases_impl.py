@@ -2143,6 +2143,7 @@ def run_system_finalizer(ctx: InstallContext) -> None:
 
 PROVISION_STATE_DIR = "var/lib/omarchy/provisioning"
 PROVISION_KEYFILE = "etc/omarchy/provisioning.key"
+PROVISION_KEY_DROPIN = "etc/mkinitcpio.conf.d/99-omarchy-provisioning-key.conf"
 NODE_PACKAGES_DIR = Path("/opt/packages")
 
 
@@ -2241,9 +2242,15 @@ def _stage_provisioning_luks_unlock(ctx: InstallContext, provisioning_dir) -> No
         'KERNEL_CMDLINE[default]+=" cryptkey=rootfs:/etc/omarchy/provisioning.key"\n'
     )
 
-    files_dropin = ctx.target / "etc/mkinitcpio.conf.d/99-omarchy-provisioning-key.conf"
+    files_dropin = ctx.target / PROVISION_KEY_DROPIN
     files_dropin.parent.mkdir(parents=True, exist_ok=True)
     files_dropin.write_text("FILES+=(/etc/omarchy/provisioning.key)\n")
+
+
+def _initramfs_carries_provisioning_key(target: Path) -> bool:
+    """Whether the initramfs has to carry the provisioning unlock key, which
+    the pre-built UKI (FILES=(), sd-encrypt, which ignores cryptkey=) lacks."""
+    return (target / PROVISION_KEY_DROPIN).is_file()
 
 
 def _initramfs_module_lines(target: Path) -> set[str]:
@@ -2466,7 +2473,13 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     if prebuilt_uki.is_file() and stale_keymap:
         info(f"› keyboard layout {stale_keymap} differs from the pre-built UKI's; "
              "building the UKI on this machine so the LUKS prompt uses it")
-    skip_prebuilt = bool(added_modules) or bool(stale_keymap)
+    # And for an encrypted deferred install: its first boot unlocks with the
+    # provisioning key, which only an initramfs built here carries.
+    provisioning_key = _initramfs_carries_provisioning_key(ctx.target)
+    if prebuilt_uki.is_file() and provisioning_key:
+        info("› the first boot unlocks with the provisioning key; "
+             "building the UKI on this machine so its initramfs carries it")
+    skip_prebuilt = bool(added_modules) or bool(stale_keymap) or provisioning_key
 
     # A selected kernel other than the image's boots first, as in omarchy's own
     # kernel migration. Written before any UKI is built so the entries sort by it.
