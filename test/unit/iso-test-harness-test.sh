@@ -153,3 +153,44 @@ for setting in "FAKE_PCI+=(106b:1802:088000)" "FAKE_PCI+=(10de:2684:030000)" \
 done
 
 echo "ok - each fake hardware setting installs and reuses its own base image"
+
+# ------------------------------------------- --keep-running and --fake-pci
+#
+# A fake PCI device lives in its own vfio-user server process, which the VM
+# reads the device from. --keep-running leaves the VM up after the suite, so
+# its devices must stay up with it; without it, the VM stops first and its
+# servers after it.
+
+take cleanup
+HTTP_PID="" RUN_DIR="$work"
+open_screenshots() { :; }
+stop_vm() {
+  local pid
+  for pid in "${FAKE_PCI_PIDS[@]}"; do
+    kill -0 "$pid" 2>/dev/null || echo "a fake device server stopped before its VM" >>"$work/order"
+  done
+  rm -f "$work/vm"
+}
+exit_with() { # KEEP_RUNNING: start two fake device servers and a VM, then exit as the harness does
+  KEEP_RUNNING=$1 FAKE_PCI_PIDS=()
+  command sleep 60 & FAKE_PCI_PIDS+=($!)
+  command sleep 60 & FAKE_PCI_PIDS+=($!)
+  touch "$work/vm"
+  : >"$work/order"
+  cleanup || true
+}
+alive() { local pid n=0; for pid in "${FAKE_PCI_PIDS[@]}"; do ! kill -0 "$pid" 2>/dev/null || n=$((n + 1)); done; echo "$n"; }
+
+exit_with true
+kept=$(alive)
+kill "${FAKE_PCI_PIDS[@]}" 2>/dev/null || true
+[[ -f $work/vm ]] || fail "--keep-running stopped the VM"
+((kept == 2)) || fail "--keep-running left the VM up but stopped $((2 - kept)) of its 2 fake device servers"
+
+exit_with false
+for pid in "${FAKE_PCI_PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
+[[ ! -f $work/vm ]] || fail "the VM was left running without --keep-running"
+[[ ! -s $work/order ]] || fail "$(head -1 "$work/order")"
+(($(alive) == 0)) || fail "the fake device servers were left running after the VM stopped"
+
+echo "ok - fake PCI devices stay up as long as their VM, and stop after it"
