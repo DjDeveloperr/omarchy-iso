@@ -38,6 +38,12 @@ fi
 # firmware (a GPU driver that fails for want of firmware has already taken the
 # screen from the firmware framebuffer, and nouveau needs nvidia/ for GSP),
 # audio (the accessibility entry speaks), microcode, and wired NICs.
+# qcom/ goes too, Adreno's included: msm keeps the display without it and
+# loads the GPU's microcode only when the DRM device is first opened
+# (msm_open -> load_gpu in drivers/gpu/drm/msm/msm_drv.c), which the installer,
+# a TUI on fbcon, never does. The DSP firmware a Snapdragon live boot needs
+# before the medium appears is in its UKI's own initramfs, which build-iso.sh
+# has this script build before it gets here.
 # The installed system gets its firmware from the root image, not from here.
 fw=/usr/lib/firmware
 if [[ -d $fw ]]; then
