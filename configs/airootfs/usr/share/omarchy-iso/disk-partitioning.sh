@@ -42,6 +42,24 @@ partition_size_bytes() {
     awk -F: -v n="$2" '$1 == n { gsub(/B/, "", $4); print $4; exit }'
 }
 
+# The disk's partition table type ("gpt", "msdos", ...), or nothing on a disk
+# with no table, which the free-space install answers with mklabel gpt over
+# the whole disk: a partitioned disk taken for a blank one loses every
+# partition. parted decides, because it is what runs mklabel and reads the
+# table from the disk itself ("unknown" when there is none). blkid's probe and
+# lsblk are witnesses after it, so a disk counts as blank only when none of the
+# three finds a table. lsblk alone answers from udev's database, which has no
+# PTTYPE for a disk udev has not finished probing, and both lsblk and blkid
+# skip the table on a disk that carries a stale RAID member signature.
+partition_table_type() {
+  local pt_type
+  pt_type=$(parted -ms "$1" print 2>/dev/null | sed -n 2p | cut -d: -f6)
+  [[ $pt_type == unknown ]] && pt_type=""
+  [[ -n $pt_type ]] || pt_type=$(blkid -p -s PTTYPE -o value "$1" 2>/dev/null || true)
+  [[ -n $pt_type ]] || pt_type=$(lsblk -dno PTTYPE "$1" 2>/dev/null || true)
+  printf '%s\n' "$pt_type"
+}
+
 # Fail loudly. The former version looped over sleep and returned its status,
 # so a device that never appeared was indistinguishable from one that did.
 wait_for_device() {
