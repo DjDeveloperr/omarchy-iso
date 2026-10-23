@@ -7,9 +7,11 @@ Phase ordering (full-disk and protected/pre-mounted):
                              wrapper before Python imports it)
     prepare_install_target → everything that can fail before the disk is
                              touched: the pre-mounted target/ESP when the JSON
-                             uses pre_mounted_config, the root image and its
-                             checksum, the package mirror's checksums, and a
-                             disk layout the image can land on
+                             uses pre_mounted_config (a freshly made btrfs,
+                             since the image replaces all of it), the root
+                             image and its checksum, the package mirror's
+                             checksums, and a disk layout the image can land
+                             on
     arch_install_system    → one archinstall flow for partition/mount-or-use,
                              root image write, per-machine
                              package delta, Limine setup, useradd, fstab; the
@@ -306,7 +308,8 @@ def prepare_install_target(ctx: InstallContext) -> None:
     if ctx.is_protected:
         verify_protected_mounts(ctx)
         # The protected layout exists already; check the real mounts.
-        _root_image_target_mounts(ctx.target)
+        _, device = _root_image_target_mounts(ctx.target)
+        verify_pre_mounted_root_empty(ctx, device)
     else:
         verify_root_image_layout(ctx.user_configuration.get("disk_config") or {})
     verify_install_medium(ctx)
@@ -331,6 +334,63 @@ def verify_root_image_layout(disk_config: dict) -> None:
         "root image install needs the target root on a btrfs @ subvolume; "
         "disk_config mounts / from no such subvolume"
     )
+
+
+# The subvolumes the configurator creates on the btrfs it hands over.
+PRE_MOUNTED_SUBVOLUMES = ("@", "@home", "@log", "@pkg")
+
+
+def _pre_mounted_root_contents(top: Path, limit: int = 3) -> list[str]:
+    """What the btrfs whose top level is mounted at top holds that a freshly
+    made one does not, up to limit paths: anything at the top level but the
+    configurator's subvolumes, and anything in those but directories (the
+    configurator leaves the mountpoints for the others and the ESP in @).
+    A snapshot or a nested subvolume with files in it shows up as its files."""
+    found: list[str] = []
+    pending = [top]
+    while pending and len(found) < limit:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda e: e.name):
+                path = Path(entry.path)
+                name = str(path.relative_to(top))
+                if directory == top and entry.name not in PRE_MOUNTED_SUBVOLUMES:
+                    found.append(name)
+                elif entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                else:
+                    found.append(name)
+                if len(found) >= limit:
+                    break
+    return found
+
+
+def verify_pre_mounted_root_empty(ctx: InstallContext, device: str) -> None:
+    """The root image is written over the whole device behind the target's
+    @, not into @, so whatever else that btrfs holds goes with it: a /home
+    on @home, snapshots, another system's subvolumes. A pre-mounted target
+    must therefore be a filesystem made for this install, as the
+    configurator's free-space path makes one (four empty subvolumes).
+    Checked on the top level, mounted read-only, where each subvolume's
+    own content shows without the mounts on top of it. Used space cannot
+    tell: a small file in @home is stored inline in metadata blocks a fresh
+    filesystem already has, and leaves it unchanged."""
+    top = ctx.state_dir / "pre-mounted-top"
+    top.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["mount", "-o", "ro,subvolid=5", device, str(top)], check=True)
+    try:
+        found = _pre_mounted_root_contents(top)
+    finally:
+        # Left mounted, it would hold the device the image is written to.
+        subprocess.run(["umount", str(top)], check=True)
+    if found:
+        raise RuntimeError(
+            f"protected mode: the btrfs on {device} already holds data "
+            f"(found {', '.join(found)}). The root image replaces that whole "
+            "filesystem, so Omarchy needs a freshly made btrfs there with only "
+            "empty @, @home, @log and @pkg subvolumes; nothing has been written"
+        )
+    info(f"› pre-mounted btrfs on {device} is freshly made")
 
 
 def verify_install_medium(ctx: InstallContext) -> None:

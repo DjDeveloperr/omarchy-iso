@@ -8,6 +8,7 @@ reshape are in test_place_root_image.py.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -254,12 +255,18 @@ class PrepareInstallTargetTest(unittest.TestCase):
     def setUp(self):
         self.calls = []
         for name in ("verify_protected_mounts", "verify_install_medium",
-                     "verify_root_image_layout", "_root_image_target_mounts"):
+                     "verify_root_image_layout", "verify_pre_mounted_root_empty"):
             patch = mock.patch.object(
                 phases_impl, name, side_effect=lambda *a, _n=name, **k: self.calls.append(_n)
             )
             patch.start()
             self.addCleanup(patch.stop)
+        patch = mock.patch.object(
+            phases_impl, "_root_image_target_mounts",
+            side_effect=lambda *a: self.calls.append("_root_image_target_mounts") or ([], "/dev/vda2"),
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_full_disk_checks_json_layout_then_image(self):
         ctx = types.SimpleNamespace(
@@ -277,8 +284,101 @@ class PrepareInstallTargetTest(unittest.TestCase):
         phases_impl.prepare_install_target(ctx)
         self.assertEqual(
             self.calls,
-            ["verify_protected_mounts", "_root_image_target_mounts", "verify_install_medium"],
+            ["verify_protected_mounts", "_root_image_target_mounts",
+             "verify_pre_mounted_root_empty", "verify_install_medium"],
         )
+
+
+class VerifyPreMountedRootEmptyTest(unittest.TestCase):
+    """The root image is written over the whole btrfs behind a pre-mounted @,
+    so a pre-mounted target must be a freshly made filesystem. The stand-in
+    for mount fills the top level the check mounts with a layout."""
+
+    DEVICE = "/dev/mapper/omarchy_root"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.ctx = types.SimpleNamespace(
+            is_protected=True, target=Path("/mnt"), state_dir=Path(tmp.name) / "state",
+            user_configuration={"disk_config": {"config_type": "pre_mounted_config"}},
+        )
+        self.calls = []
+        for name in ("verify_protected_mounts", "verify_install_medium"):
+            patch = mock.patch.object(phases_impl, name)
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch.object(phases_impl, "_root_image_target_mounts",
+                                  return_value=([], self.DEVICE))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def check(self, layout, umount_fails=False):
+        """layout: paths under the top level; a trailing / makes a directory,
+        "a -> b" a symlink."""
+        def fake_run(argv, **kwargs):
+            argv = [str(a) for a in argv]
+            self.calls.append(argv)
+            if argv[:3] == ["mount", "-o", "ro,subvolid=5"]:
+                top = Path(argv[4])
+                for path in layout:
+                    if " -> " in path:
+                        link, dest = path.split(" -> ")
+                        (top / link).symlink_to(dest)
+                    elif path.endswith("/"):
+                        (top / path).mkdir(parents=True, exist_ok=True)
+                    else:
+                        (top / path).parent.mkdir(parents=True, exist_ok=True)
+                        (top / path).write_text("data\n")
+            elif argv[0] == "umount":
+                if umount_fails:
+                    if kwargs.get("check"):
+                        raise subprocess.CalledProcessError(32, argv)
+                    return subprocess.CompletedProcess(argv, 32, "", "")
+                shutil.rmtree(argv[1])
+                Path(argv[1]).mkdir()
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with mock.patch.object(phases_impl.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(phases_impl, "info"):
+            phases_impl.prepare_install_target(self.ctx)
+
+    # What the configurator hands over: four new subvolumes, and in @ the
+    # directories it mounts the others and the ESP on.
+    FRESH = ["@/home/", "@/var/log/", "@/var/cache/pacman/pkg/", "@/boot/",
+             "@home/", "@log/", "@pkg/"]
+
+    def test_configurators_fresh_filesystem_passes(self):
+        self.check(self.FRESH)
+        self.assertEqual(self.calls[-1][0], "umount")
+
+    def test_file_in_home_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, r"@home/emir/notes.txt.*fresh"):
+            self.check(self.FRESH + ["@home/emir/notes.txt"])
+        self.assertEqual(self.calls[-1][0], "umount")
+
+    def test_other_subvolume_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, r"found @snapshots\b"):
+            self.check(self.FRESH + ["@snapshots/1/"])
+
+    def test_file_in_root_subvolume_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, r"@/etc/fstab"):
+            self.check(self.FRESH + ["@/etc/fstab"])
+
+    def test_symlink_to_a_directory_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, r"@home/emir"):
+            self.check(self.FRESH + ["@home/emir -> /"])
+
+    def test_top_level_left_mounted_fails_the_check(self):
+        # A top level still mounted would keep the device busy, or be
+        # written under, when the image goes over it.
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.check(self.FRESH, umount_fails=True)
+
+    def test_top_level_is_mounted_read_only_on_the_root_device(self):
+        self.check(self.FRESH)
+        mount = next(c for c in self.calls if c[0] == "mount")
+        self.assertEqual(mount[:4], ["mount", "-o", "ro,subvolid=5", self.DEVICE])
 
 
 class FinishRootImageTest(unittest.TestCase):
