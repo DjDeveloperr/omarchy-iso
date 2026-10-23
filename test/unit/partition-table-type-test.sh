@@ -68,7 +68,7 @@ blkid() {
 }
 
 new_disk() {
-  disk="$WORK/disk-$RANDOM.img"
+  disk=$(mktemp "$WORK/disk-XXXXXX.img")
   truncate -s "$1" "$disk"
 }
 
