@@ -337,6 +337,8 @@ def arch_install_system(ctx: InstallContext) -> None:
             info(f"› installing Omarchy runtime + {base_pkgs_file.name}")
             installer.add_additional_packages(_runtime_package_list(ctx, base_pkgs_file))
 
+            _write_language_marker(ctx)
+
             # Tailscale is bundled in the offline mirror but only installed
             # when an autoinstall drive staged an auth key; must happen here,
             # while the mirror is still bind-mounted, not in the phase that
@@ -814,6 +816,19 @@ def _base_package_file(share: Path = Path("/usr/share/omarchy-iso")) -> Path:
     if detected and platform_list.is_file():
         return platform_list
     return share / "omarchy-base.packages"
+
+
+def _write_language_marker(ctx: InstallContext) -> None:
+    """Hand the installer's language to the runtime's finalizers, which
+    generate its locale and set it per user. English writes nothing, so an
+    English install stays exactly what it was."""
+    language = ctx.omarchy_install.get("language")
+    if not language or language == "en":
+        return
+    marker = ctx.target / "etc/omarchy/language"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(language + "\n")
+    marker.chmod(0o644)
 
 
 def _runtime_package_list(ctx: InstallContext, base_pkgs_file: Path | None = None) -> list[str]:

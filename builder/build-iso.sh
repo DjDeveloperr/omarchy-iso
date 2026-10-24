@@ -336,10 +336,10 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   # openssh and pciutils serve the recovery entry and remote debugging.
   # For the Snapdragon laptops: ukify builds the live UKI, and the installer
   # saves a laptop's signed firmware from Windows with qcom-firmware-extract.
-  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted systemd-ukify linux-firmware-qcom qcom-firmware-extract python)
+  arch_packages=("$OMARCHY_KERNEL" archlinuxarm-keyring git gum jq openssl openssh pciutils plymouth ttfx terminus-font tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted systemd-ukify linux-firmware-qcom qcom-firmware-extract python)
 else
   # linux-t2 is the live kernel on a Mac (configs/grub/grub.cfg).
-  arch_packages=("$OMARCHY_KERNEL" linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
+  arch_packages=("$OMARCHY_KERNEL" linux-t2 git gum jq openssl plymouth ttfx terminus-font tzupdate omarchy-keyring "$OMARCHY_SETTINGS_PACKAGE" lvm2 cryptsetup parted)
 fi
 live_packages_file="$build_cache_dir/packages.$OMARCHY_ARCH"
 printf '%s\n' "${arch_packages[@]}" >> "$live_packages_file"

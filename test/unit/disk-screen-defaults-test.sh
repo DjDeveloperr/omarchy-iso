@@ -85,13 +85,13 @@ check "an SD card goes after the internal disks; an eMMC's boot areas are not of
 
 echo "==> the mode list"
 check "a disk with partitions and room: free space first" \
-  "Free space install (alongside existing data)|Full disk install|Choose a different disk" \
+  "free_space|full_disk|other_disk" \
   "$(install_mode_choices true 3 | paste -sd'|' -)"
 check "an empty disk with room: full disk first" \
-  "Full disk install|Free space install (alongside existing data)|Choose a different disk" \
+  "full_disk|free_space|other_disk" \
   "$(install_mode_choices true 0 | paste -sd'|' -)"
 check "no free-space mode on offer (BIOS, or no room)" \
-  "Full disk install|Choose a different disk" \
+  "full_disk|other_disk" \
   "$(install_mode_choices false 3 | paste -sd'|' -)"
 
 echo "==> the configurator calls them"

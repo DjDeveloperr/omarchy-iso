@@ -660,10 +660,10 @@ drive_configurator() {
   capture_console "success-installer-00-greeter"
   press ret
 
-  # Keyboard is the first screen. Ctrl+C there is the hidden entry into deferred provisioning
-  # mode; a normal install just selects the layout.
-  wait_for_screen "keyboard layout" 300
-  capture_console "success-installer-01-keyboard-layout"
+  # Language is the first screen, with English preselected. Ctrl+C there is the
+  # hidden entry into deferred provisioning; a normal install picks a language.
+  wait_for_screen "Language" 300
+  capture_console "success-installer-00-language"
 
   if $PROVISION; then
     press ctrl-c # arm "prepare for another owner"
@@ -693,35 +693,39 @@ drive_configurator() {
     return 0
   fi
 
+  press ret
+  wait_for_screen "keyboard layout" 60
+  capture_console "success-installer-01-keyboard-layout"
+
   if [[ $KEYBOARD_LABEL != "English (US)" ]]; then
     select_keyboard "$KEYBOARD_LABEL"
     capture_console "success-installer-01-selected-keyboard"
   fi
   press ret
 
-  # Normal flow: user step comes before disk selection.
-  wait_for_screen "Username" 120
+  # Normal flow: timezone and user step come before disk selection.
+  wait_for_screen "Timezone" 180 # the geo guess can take a moment
+  capture_console "success-installer-02-timezone"
+  press ret
+
+  wait_for_screen "Username" 60
   type_text "$GUEST_USER"
-  capture_console "success-installer-02-username"
+  capture_console "success-installer-03-username"
   press ret
 
   wait_for_screen "Password" 60
   type_text "$GUEST_PASSWORD"
-  capture_console "success-installer-03-password"
+  capture_console "success-installer-04-password"
   press ret
 
   wait_for_screen "Must match" 60
   type_text "$GUEST_PASSWORD"
-  capture_console "success-installer-04-password-confirmation"
+  capture_console "success-installer-05-password-confirmation"
   press ret
 
   wait_for_screen "Hostname" 60
   type_text "$GUEST_HOSTNAME"
   capture_console "success-installer-07-hostname"
-  press ret
-
-  wait_for_screen "Timezone" 180 # tzupdate geo-guess can take a moment
-  capture_console "success-installer-08-timezone"
   press ret
 
   wait_for_screen "look right" 60

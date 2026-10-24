@@ -15,6 +15,18 @@ from typing import Any
 
 from .keyboard import validate_input_selection
 
+LANGUAGES = Path("/usr/share/omarchy/default/i18n/locales.json")
+
+
+def validate_language(language: Any, registry: Path | None = None) -> None:
+    """The installer's language is a registry code, checked before any disk is
+    touched; the target only ever reads it back as data."""
+    registry = registry or LANGUAGES
+    if language is None or language in ("", "en"):
+        return
+    if not isinstance(language, str) or not registry.is_file() or language not in json.loads(registry.read_text()):
+        raise RuntimeError(f"Unsupported language: {language!r}")
+
 
 @dataclass
 class InstallContext:
@@ -60,6 +72,7 @@ class InstallContext:
             user_configuration["kernels"] = [kernel]
 
         validate_input_selection(omarchy_install.get("input_method"), omarchy_install.get("input_xkb_layout", ""))
+        validate_language(omarchy_install.get("language"))
 
         # Deferred provisioning: the whole system installs but user creation is deferred to
         # first boot. Selected by the configurator (omarchy_install.defer_provisioning) or by
