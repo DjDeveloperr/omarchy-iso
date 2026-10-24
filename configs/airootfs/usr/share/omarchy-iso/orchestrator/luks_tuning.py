@@ -11,8 +11,8 @@ each open is a full key derivation (2.2 s on a 12600K at the configurator's
 iter-time). The cmdline (see phases_impl) spells the same options for both
 initramfs flavours.
 
-The format itself is archinstall's: argon2id at the configurator's
-iter-time, benchmarked on the machine.
+The format itself is archinstall's. For the configurator's 2 s Argon2id
+policy, a completed calibration from this live boot can replace the search.
 """
 
 from __future__ import annotations
@@ -109,9 +109,28 @@ def _run_command(self, cmd: str, peek_output: bool = False):
     return SysCommand(f"arch-chroot {self.target} {cmd}", peek_output=peek_output)
 
 
+def _with_calibration(original_encrypt):
+    def encrypt(self, *args, **kwargs):
+        from archinstall.lib.disk import luks
+        from .luks_calibration import format_command, stop_calibration
+        stop_calibration()
+        original_run = luks.run
+        # Keep archinstall's passphrase/key-file handling, return value and
+        # error handling intact. Only adjust its format argv, for this call.
+        def calibrated_run(command, *run_args, **run_kwargs):
+            return original_run(format_command(command), *run_args, **run_kwargs)
+        luks.run = calibrated_run
+        try:
+            return original_encrypt(self, *args, **kwargs)
+        finally:
+            luks.run = original_run
+    return encrypt
+
+
 def apply() -> None:
     if os.environ.get("OMARCHY_LUKS_TUNING", "1") != "1":
         return
+    Luks2.encrypt = _with_calibration(Luks2.encrypt)  # type: ignore[method-assign]
     Luks2.unlock = _unlock    # type: ignore[method-assign]
     Luks2.lock = _lock        # type: ignore[method-assign]
     from archinstall.lib.installer import Installer

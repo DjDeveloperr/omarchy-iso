@@ -319,3 +319,24 @@ Run `./bin/omarchy-iso-upload [release/omarchy.iso]`. This requires rclone confi
 ## Full release of the ISO
 
 Run `./bin/omarchy-iso-release VERSION` to create, test, sign, and upload the ISO in one flow. Add `--rc` to release an RC build instead.
+
+## LUKS calibration during live boot
+
+`omarchy-luks-calibrate.service` runs cryptsetup's 2000 ms Argon2id benchmark
+after the medium verifiers, while the wizard is open. It publishes only the
+iteration, memory and parallel costs in a root-only file under
+`/run/omarchy-luks-calibration/`; no password, volume key or header is cached.
+Both the free-space wizard and archinstall's full-disk format consume it.
+Each format still creates a fresh header, salt and volume key.
+
+An unfinished benchmark is cancelled before formatting. Missing, malformed,
+incompatible results leave cryptsetup's normal calibration in
+place; custom iteration times and key sizes are preserved. Background work is
+skipped below 1.5 GiB available RAM, and a cached cost is rejected if memory
+has since become tight. The benchmark runs at normal priority after the hash
+jobs, without changing CPU governors. Timing depends on machine load and
+power policy; moving calibration does not guarantee identical unlock times.
+
+`test/unit/test_luks_calibration.py` checks parsing, validation and command
+fallbacks. The QEMU calibration scenario compares actual Argon2 keyslot
+metadata and repeated passphrase checks in the booted ISO.

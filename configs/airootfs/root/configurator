@@ -797,7 +797,7 @@ run_partition_execute() {
       # free-space path formats and opens here, before the orchestrator runs,
       # so that tuning does not reach it.
       if ! printf "%s" "$password" |
-        cryptsetup luksFormat --type luks2 --batch-mode "$root_partition_device" - 2>&1; then
+        omarchy-luks-calibrate format "$root_partition_device" 2>&1; then
         disk_abort_hook "Formatting LUKS2 on $root_partition_device failed"
       fi
       if ! printf "%s" "$password" |
