@@ -1347,6 +1347,10 @@ install_phase() {
   ssh_guest "echo $GUEST_PASSWORD | sudo -S cat /var/log/pacman.log 2>/dev/null" \
     >"$RUN_DIR/pacman.log" 2>/dev/null || true
 
+  # Keep format decisions and step timings for --install-only runs too.
+  ssh_guest "echo $GUEST_PASSWORD | sudo -S cat /var/log/omarchy-install.log 2>/dev/null" \
+    >"$RUN_DIR/omarchy-install.log" 2>/dev/null || true
+
   log "Installed system is up. Saving base image."
   stop_vm
 }
