@@ -329,11 +329,14 @@ iteration, memory and parallel costs in a root-only file under
 Both the free-space wizard and archinstall's full-disk format consume it.
 Each format still creates a fresh header, salt and volume key.
 
-An unfinished benchmark is cancelled before formatting. Missing, malformed,
+An unfinished benchmark is cancelled before formatting. Missing, malformed or
 incompatible results leave cryptsetup's normal calibration in
 place; custom iteration times and key sizes are preserved. Background work is
-skipped below 1.5 GiB available RAM, and a cached cost is rejected if memory
-has since become tight. The benchmark runs at normal priority after the hash
+skipped below 4 GiB usable RAM or 1.5 GiB available RAM. Only a benchmark
+that retains the full default 1 GiB memory cost is reusable, and it is rejected
+if memory has since become tight. Below 4 GiB without swap, cryptsetup caps
+Argon2 at half of free RAM; the medium's page cache makes that cap change
+between boot and format, so those machines keep normal calibration. The benchmark runs at normal priority after the hash
 jobs, without changing CPU governors. Timing depends on machine load and
 power policy; moving calibration does not guarantee identical unlock times.
 

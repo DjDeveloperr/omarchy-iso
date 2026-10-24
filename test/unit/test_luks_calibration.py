@@ -23,6 +23,7 @@ class Calibration(unittest.TestCase):
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.path = self.directory / 'result.json'
         self.enterContext(mock.patch.object(luks, 'STATE', self.path))
+        self.enterContext(mock.patch.object(luks, 'memory_total', return_value=8*1024*1024))
         self.enterContext(mock.patch.object(luks, 'memory_available', return_value=4*1024*1024))
         self.enterContext(mock.patch.object(luks.os, 'cpu_count', return_value=4))
         self.data = dict(schema=1, iter_time=2000, key_size=512, cpus=4,
@@ -125,6 +126,19 @@ class Calibration(unittest.TestCase):
         with mock.patch.object(luks, 'memory_available', return_value=512*1024), mock.patch.object(luks.subprocess, 'run') as run:
             luks.calibrate()
             run.assert_not_called()
+        self.assertFalse(self.path.exists())
+
+    def test_small_machine_and_reduced_cost_do_not_reuse_calibration(self):
+        self.write()
+        with mock.patch.object(luks, 'memory_total', return_value=4*1024*1024-65536), mock.patch.object(luks.subprocess, 'run') as run:
+            self.assertEqual(luks.cached_options(2000,512), [])
+            luks.calibrate()
+            run.assert_not_called()
+        self.assertFalse(self.path.exists())
+        self.write({**self.data, 'memory': 96082})
+        self.assertEqual(luks.cached_options(2000,512), [])
+        with mock.patch.object(luks.subprocess, 'run', return_value=types.SimpleNamespace(stdout=LINE.replace('1048576 memory','96082 memory'))):
+            luks.calibrate()
         self.assertFalse(self.path.exists())
 
     def test_stop_failure_does_not_block_normal_format(self):

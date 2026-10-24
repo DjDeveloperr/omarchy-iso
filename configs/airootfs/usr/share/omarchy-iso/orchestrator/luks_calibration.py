@@ -18,6 +18,10 @@ MIN_MEMORY = 65536
 MAX_MEMORY = 1048576
 
 
+def memory_total() -> int:
+    return int(re.search(r"^MemTotal:\s+(\d+)", Path("/proc/meminfo").read_text(), re.M)[1])
+
+
 def memory_available() -> int:
     return int(re.search(r"^MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text(), re.M)[1])
 
@@ -47,16 +51,23 @@ def validate_cost(data: dict) -> None:
 def calibrate() -> None:
     STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.unlink(missing_ok=True)
-    # Do not put a 1 GiB background job onto a small live environment. The
-    # ordinary format remains responsible for calibrating under its own load.
-    if memory_available() < 1536 * 1024:
-        print("Skipping background LUKS calibration: less than 1.5 GiB available")
+    # Below 4 GiB without swap, cryptsetup caps Argon2 at half of *free*
+    # RAM (not MemAvailable). The medium's page cache makes that cap change
+    # between boot and format. Leave these machines to normal calibration.
+    # Also avoid putting a 1 GiB background job onto a busy live environment.
+    if memory_total() < 4 * 1024 * 1024 or memory_available() < 1536 * 1024:
+        print("Skipping background LUKS calibration: insufficient memory headroom")
         return
     output = subprocess.run(
         ["cryptsetup", "benchmark", "--pbkdf", "argon2id", "--iter-time", str(ITER_TIME),
          "--key-size", str(KEY_SIZE)], check=True, capture_output=True, text=True,
         env={**os.environ, "LC_ALL": "C"}, timeout=60).stdout
     data = parse_benchmark(output)
+    # Only reuse the full default memory cost. A benchmark that reduced it
+    # (memory pressure or a slow CPU) is not evidence for a reusable policy.
+    if data["memory"] != MAX_MEMORY:
+        print("Skipping cached LUKS calibration: benchmark reduced the memory cost")
+        return
     data.update(schema=1, iter_time=ITER_TIME, key_size=KEY_SIZE,
                 cpus=os.cpu_count())
     # A reader sees either no result or the complete, root-owned result.
@@ -99,6 +110,8 @@ def cached_options(iter_time: int, key_size: int) -> list[str]:
         if (data.get("schema") != 1
                 or data.get("iter_time") != iter_time or data.get("key_size") != key_size
                 or data.get("cpus") != os.cpu_count()
+                or data["memory"] != MAX_MEMORY
+                or memory_total() < 4 * 1024 * 1024
                 or data["memory"] + 256 * 1024 > memory_available()):
             return []
     except (OSError, ValueError, TypeError, KeyError):
