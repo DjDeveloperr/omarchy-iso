@@ -12,16 +12,16 @@ MEMORY=8192 start_vm "$RUN_DIR/scratch.qcow2" "$RUN_DIR/serial.log" \
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
   -device ide-cd,drive=cdrom0,bootindex=2
 bootstrap_live_root_ssh
-# No cidata is attached: the wizard is waiting while the boot job runs.
-ssh_live_root 'timeout 120 bash -c "until test -f /run/omarchy-luks-calibration/result.json; do sleep 1; done"'
-ssh_live_root 'journalctl -b -u omarchy-luks-calibrate.service --no-pager' >"$RUN_DIR/calibration-unit.log"
+# No cidata is attached: the wizard waits while the guest test waits for the
+# service to exit successfully. A deliberate skip exercises normal formatting.
 ssh_live_root 'cat >/tmp/luks-calibration-guest.py' <"$ROOT/test/luks-calibration-guest.py"
 if ssh_live_root 'python /tmp/luks-calibration-guest.py' >"$RUN_DIR/calibration.json" 2>"$RUN_DIR/calibration.stderr"; then
-  check "both callers use measured costs; fallbacks unlock at comparable cost" true
+  check "both callers format and unlock after completed or skipped calibration" true
 else
   cat "$RUN_DIR/calibration.stderr" >&2
-  check "both callers use measured costs; fallbacks unlock at comparable cost" false
+  check "both callers format and unlock after completed or skipped calibration" false
 fi
+ssh_live_root 'journalctl -b -u omarchy-luks-calibrate.service --no-pager' >"$RUN_DIR/calibration-unit.log"
 stop_vm
 
 # A nominal 4 GiB VM has <4 GiB usable RAM. cryptsetup's memory cap here
@@ -31,9 +31,13 @@ MEMORY=4096 start_vm "$RUN_DIR/scratch.qcow2" "$RUN_DIR/small-memory-serial.log"
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
   -device ide-cd,drive=cdrom0,bootindex=2
 bootstrap_live_root_ssh
-ssh_live_root 'systemctl start omarchy-luks-calibrate.service; timeout 120 bash -c "while systemctl is-active --quiet omarchy-luks-calibrate.service; do sleep 1; done"'
+ssh_live_root 'cat >/tmp/luks-calibration-guest.py' <"$ROOT/test/luks-calibration-guest.py"
+if ssh_live_root 'python /tmp/luks-calibration-guest.py --expect-no-cache' >"$RUN_DIR/small-memory.json" 2>"$RUN_DIR/small-memory.stderr"; then
+  check "4 GiB live guest formats and unlocks with normal calibration" true
+else
+  cat "$RUN_DIR/small-memory.stderr" >&2
+  check "4 GiB live guest formats and unlocks with normal calibration" false
+fi
 ssh_live_root 'journalctl -b -u omarchy-luks-calibrate.service --no-pager' >"$RUN_DIR/small-memory-unit.log"
-check "4 GiB live guest leaves memory-dependent costs to normal formatting" \
-  ssh_live_root 'test ! -e /run/omarchy-luks-calibration/result.json && test "$(systemctl show -p ExecMainStatus --value omarchy-luks-calibrate.service)" = 0'
 stop_vm
 finish

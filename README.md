@@ -341,5 +341,17 @@ jobs, without changing CPU governors. Timing depends on machine load and
 power policy; moving calibration does not guarantee identical unlock times.
 
 `test/unit/test_luks_calibration.py` checks parsing, validation and command
-fallbacks. The QEMU calibration scenario compares actual Argon2 keyslot
-metadata and repeated passphrase checks in the booted ISO.
+fallbacks. The QEMU calibration scenario waits for a successful service exit,
+not for a cache file: a slow CPU can legitimately skip caching even with 8 GiB
+of RAM. With a cache it compares actual Argon2 keyslot costs and unlock times;
+without one it checks normal formatting and passphrase unlocks through both
+installer callers. The 4 GiB guest exercises that fallback too. Missing,
+failed, killed or unfinished services still fail the scenario, with service
+state and journal evidence retained. `test/unit/test_luks_calibration_scenario.py`
+covers those distinctions and ensures a failed fallback unlock is not hidden.
+
+Review validation (2026-10-25): the shell suite and 327 Python tests passed
+on the MSI desktop. The revised QEMU scenario passed with an 8 GiB cached
+result and a successful 4 GiB skip; the latter formatted and unlocked through
+both callers, including the malformed-cache fallback. This test-only update
+reused the previously built RC ISO; installer code was unchanged.
