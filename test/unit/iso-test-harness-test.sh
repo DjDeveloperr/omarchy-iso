@@ -194,3 +194,34 @@ for pid in "${FAKE_PCI_PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
 (($(alive) == 0)) || fail "the fake device servers were left running after the VM stopped"
 
 echo "ok - fake PCI devices stay up as long as their VM, and stop after it"
+
+# The free-space fixture has existing partitions. Drive the real wizard
+# function against the product's actual ordering, refusing an erase choice.
+(
+  take drive_configurator
+  source "$ROOT/configs/airootfs/usr/share/omarchy-iso/disk-partitioning.sh"
+  mapfile -t modes < <(install_mode_choices true 2)
+  FREE_SPACE=true PROVISION=false ENCRYPT=true
+  KEYBOARD_LABEL="English (US)" GUEST_USER=omarchy GUEST_PASSWORD=omarchy
+  picking=false selected=0 choice=""
+  type_text() { :; }
+  capture_console() { :; }
+  wait_for_screen() {
+    case $1 in
+      "installation mode") picking=true ;;
+      "of free space")
+        [[ $choice == "Free space install"* ]] || fail "free-space harness selected $choice"
+        ;;
+    esac
+  }
+  press() {
+    $picking || return 0
+    case $1 in
+      home) selected=0 ;;
+      down) selected=$((selected+1)) ;;
+      ret) choice=${modes[$selected]}; picking=false ;;
+    esac
+  }
+  drive_configurator
+)
+echo "ok - the free-space wizard harness preserves the fixture's existing partitions"
