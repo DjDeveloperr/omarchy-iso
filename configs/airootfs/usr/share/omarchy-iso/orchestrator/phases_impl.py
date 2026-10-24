@@ -1205,6 +1205,15 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str 
         f"OMARCHY_NVIM_PACKAGE={_omarchy_nvim_package()}",
         "OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log",
         "OMARCHY_LOG_TO_STDOUT=1",
+        # The install must not wait on a network it may not have. mise reshim
+        # resolves the version list of every tool declared in
+        # /etc/mise/conf.d/omarchy-tools.toml, all of them version = "latest":
+        # offline, each lookup waits out mise's HTTP timeout before falling
+        # back, and the user finalizer measured 40.10 s that way (five tools at
+        # 20 s) on a 65 s install. The tools are lazy, so reshim only needs the
+        # declarations; the first real use of a tool installs it later, with a
+        # network. MISE_OFFLINE blocks every HTTP request.
+        "MISE_OFFLINE=1",
     ]
     if _install_debug_enabled():
         env_extras.append("OMARCHY_INSTALL_DEBUG=1")
