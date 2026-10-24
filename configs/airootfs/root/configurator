@@ -268,7 +268,6 @@ user_form() {
   # Hash the password with SHA-512 crypt ($6$), which is what openssl passwd offers
   password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin)
 
-  omarchy_prompt_identity || return $?
   omarchy_prompt_hostname || return $?
   omarchy_prompt_timezone || return $?
 }
@@ -294,8 +293,6 @@ user_step() {
     echo -e "Field,Value
 Username,$username
 Password,$(printf "%${#password}s" | tr ' ' '*')
-Full name,${full_name:-[Skipped]}
-Email address,${email_address:-[Skipped]}
 Hostname,$hostname
 Timezone,$timezone
 Keyboard,$keyboard" |
@@ -490,13 +487,12 @@ disk_abort_hook() {
   abort "$1"
 }
 
-# Save the configurator answers the installer consumes: git identity and
-# encryption choice as plain files, account details as archinstall credentials.
+# Save the configurator answers the installer consumes: encryption choice as a
+# plain file, account details as archinstall credentials. The git identity is
+# asked for after first login rather than here.
 # Deferred-provisioning installs defer the user to first boot: no credentials, and on encrypted
 # targets the orchestrator generates a throwaway LUKS passphrase itself.
 write_user_files() {
-  echo "$full_name" >user_full_name.txt
-  echo "$email_address" >user_email_address.txt
   printf '%s\n' "$encrypt_installation" >user_encrypt_installation.txt
 
   if $defer_provisioning; then
@@ -542,16 +538,10 @@ print_dry_run_files() {
   echo -e "\n\nUser Credentials:"
   cat user_credentials.json
 
-  echo -e "\n\nUser Full Name:"
-  cat user_full_name.txt
-
-  echo -e "\nUser Email Address:"
-  cat user_email_address.txt
-
-  echo -e "\nDisk Encryption:"
+  echo -e "\n\nDisk Encryption:"
   cat user_encrypt_installation.txt
 
-  rm -f user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt user_encrypt_installation.txt
+  rm -f user_configuration.json user_credentials.json user_encrypt_installation.txt
 }
 
 # Shared error screen for every "can't fit Omarchy here" outcome of the
@@ -1119,8 +1109,6 @@ if $defer_provisioning; then
   username=""
   password=""
   password_hash=""
-  full_name=""
-  email_address=""
   # Neutral defaults for the install; the owner overwrites both in the
   # first-boot OOBE (omarchy-provision-owner).
   hostname="omarchy"
