@@ -62,6 +62,7 @@ from archinstall.lib.models.device import DiskLayoutType, EncryptionType
 from archinstall.lib.pacman.config import PacmanConfig
 from archinstall.lib.models.users import User
 
+from .command import capture
 from .ui import info
 
 # The archinstall this adapter is written and tested against. luks_tuning and
@@ -347,6 +348,7 @@ def perform_filesystem_operations(arch_config: ArchConfig, throwaway_root_fs: bo
                 return
             except Exception as exc:
                 if attempt == attempts or "unable to inform the kernel" not in str(exc):
+                    _log_disk_state(arch_config)
                     raise
                 info(f"› partition commit lost a udev race (attempt {attempt}/{attempts}); retrying")
 
@@ -370,6 +372,48 @@ class OmarchyInstaller(Installer):
         if sync_log is not None:
             sync_log()
         return None
+
+
+def _log_disk_state(arch_config: ArchConfig) -> None:
+    """Write what the disk looked like when archinstall gave up on it into the
+    install log: the support log is all a report arrives with, and by then the
+    machine has been rebooted out of the state that explains it."""
+    try:
+        for mod in arch_config.disk_config.device_modifications:
+            _log_one_disk_state(str(mod.device.device_info.path))
+    except Exception as exc:  # noqa: BLE001 -- the failure being explained wins
+        info(f"› could not record the disk state: {exc}")
+
+
+# A failing disk can stall a read; the install error waits on these, so none
+# gets more than a few seconds.
+def _bounded(cmd: list[str]):
+    return capture(["timeout", "--kill-after=5", "10", *cmd])
+
+
+def _log_one_disk_state(disk: str) -> None:
+    commands = [["lsblk", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS", disk]]
+    partitions = []
+    for line in _bounded(["lsblk", "-rnpo", "PATH,TYPE", disk]).stdout.splitlines():
+        path, _, kind = line.partition(" ")
+        if kind == "part":
+            partitions.append(path)
+    # A partition path archinstall wrote after the kernel dropped it is a regular
+    # file, which lsblk never lists, so look at what is in /dev as well.
+    nodes = sorted(set(partitions) | {str(p) for p in Path(disk).parent.glob(f"{Path(disk).name}?*")})
+    commands += [["stat", "-c", "%n: %F", node] for node in nodes]
+    for path in partitions:
+        commands += [
+            ["ls", f"/sys/class/block/{Path(path).name}/holders"],
+            ["wipefs", "--no-act", path],
+        ]
+    commands.append(["sh", "-c", "dmesg | tail -n 40"])
+    lines = [f"› disk state after the failure on {disk}"]
+    for cmd in commands:
+        result = _bounded(cmd)
+        lines.append(f"$ {' '.join(cmd)}")
+        lines += [f"  {out}" for out in (result.stdout + result.stderr).splitlines()]
+    info("\n    ".join(lines))
 
 
 @contextmanager

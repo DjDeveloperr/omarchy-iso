@@ -912,6 +912,21 @@ wait_for_unattended_install() {
   done
 }
 
+# Boot the ISO with the cidata drive onto <disk> and wait until the installed
+# system answers SSH, as install_phase does for the base image. Returns
+# non-zero when the installer stops or times out (used-disk).
+install_unattended() {
+  local disk="$1" serial="$2"
+
+  start_vm "$disk" "$serial" \
+    -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
+    -device ide-cd,drive=cdrom0,bootindex=2 \
+    -drive "file=$CIDATA_IMG,format=raw,if=none,id=cidata" \
+    -device usb-storage,drive=cidata
+
+  wait_for_unattended_install install "$serial"
+}
+
 install_phase() {
   log "Installing $(basename "$ISO") unattended via cidata (headless)"
 
