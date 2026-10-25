@@ -82,6 +82,11 @@ in_try runuser -u "$TRY_USER" -- env \
   OMARCHY_INSTALL_USER="$TRY_USER" MISE_OFFLINE=1 \
   /usr/bin/omarchy-provision-user --force --first-install
 
+# Stay awake: no screensaver and no idle lock in a session someone is trying
+# out (the state omarchy-toggle-idle stay-awake writes).
+in_try runuser -u "$TRY_USER" -- install -D -m 0644 /dev/null \
+  "/home/$TRY_USER/.local/state/omarchy/indicators/stay-awake"
+
 # Services Omarchy's install/config/enable-services.sh enables that a live
 # desktop needs. Not cups, avahi or docker: nothing to print to, browse or run.
 for unit in systemd-resolved.service NetworkManager.service power-profiles-daemon.service \
