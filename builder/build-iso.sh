@@ -996,10 +996,9 @@ resolve_expected_packages() {
   # adds to the image's plain set on that platform.
   local base_list=${1:-}
   local resolve_root=/tmp/omarchy-expected-packages
-  local image_count resolved kernel=linux
-  local -a targets
-  [[ $OMARCHY_ARCH == aarch64 ]] && kernel=$OMARCHY_KERNEL
-  targets=("$kernel")
+  local image_count resolved
+  # The image holds no kernel; the delta installs the build's own.
+  local -a targets=("$OMARCHY_KERNEL")
   if [[ -n $base_list ]]; then
     mapfile -t -O 1 targets < <(
       grep -hv '^#\|^$' "$base_list" | grep -Fxv -f <(printf '%s\n' "${image_packages[@]}") || true
