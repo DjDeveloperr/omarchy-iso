@@ -35,6 +35,10 @@ if [[ -f /usr/share/omarchy-iso/install-debug ]]; then
   export OMARCHY_INSTALL_DEBUG=1
 fi
 
+# gum's key hints ("enter submit") are hardcoded English and add nothing to
+# prompts that already say what to do, so every widget leaves them off.
+export GUM_CHOOSE_SHOW_HELP=false GUM_CONFIRM_SHOW_HELP=false GUM_FILTER_SHOW_HELP=false GUM_INPUT_SHOW_HELP=false
+
 # Tokyo Night palette so the live VT matches the installed look.
 set_tokyo_night_colors() {
   echo -en "\e]P01a1b26"; echo -en "\e]P1f7768e"; echo -en "\e]P29ece6a"
@@ -147,6 +151,11 @@ if [[ -f /root/defer-provisioning ]] ||
   export OMARCHY_UI_DEFER_PROVISIONING=yes
 fi
 
+# The dashboard speaks the language picked in the configurator, or named by an
+# autoinstall configuration.
+OMARCHY_ISO_LANGUAGE="$(jq -r '.omarchy_install.language // "en"' /root/user_configuration.json 2>/dev/null || echo en)"
+export OMARCHY_ISO_LANGUAGE
+
 # The foreground dashboard is now the sole visible install UI owner. It starts
 # the actual installer as a non-interactive child, logs child output, waits for
 # completion, then renders the final installed-time/reboot prompt itself.
@@ -159,8 +168,6 @@ rm -f /run/omarchy-install/state.json
   /usr/local/bin/omarchy-iso-install \
     --config /root/user_configuration.json \
     --creds /root/user_credentials.json \
-    --full-name-file /root/user_full_name.txt \
-    --email-file /root/user_email_address.txt \
     --encrypt-file /root/user_encrypt_installation.txt \
     --authorized-keys-file /root/authorized_keys \
     --tailscale-authkey-file /root/tailscale_authkey \

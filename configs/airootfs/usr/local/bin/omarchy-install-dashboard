@@ -24,6 +24,14 @@ INSTALL_CMD=("$@")
 TTY_PATH="${OMARCHY_DASHBOARD_TTY:-/dev/tty}"
 LOGO_PATH="${OMARCHY_PATH:-/usr/share/omarchy}/logo.txt"
 
+# Speak the language picked in the configurator; t <key> [args].
+INSTALLER_I18N="${INSTALLER_I18N:-/usr/share/omarchy-iso/i18n.sh}"
+[[ -r $INSTALLER_I18N ]] ||
+  INSTALLER_I18N="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../share/omarchy-iso/i18n.sh"
+source "$INSTALLER_I18N"
+i18n_load "${OMARCHY_ISO_LANGUAGE:-en}"
+i18n_console_font "$TTY_PATH"
+
 # Autoinstall has no one at the keyboard, and every prompt this dashboard owns
 # reads from the TTY, so each would hang forever. Suppress them here rather than
 # in the scripts they live in: this process is the only owner of the visible UI.
@@ -51,41 +59,25 @@ export GUM_CONFIRM_UNSELECTED_BACKGROUND="${GUM_CONFIRM_UNSELECTED_BACKGROUND:-0
 child_pid=""
 child_pgid=""
 
-whimsy=(
-  "delivering delightful defaults"
-  "saving setup struggles"
-  "picking polished packages"
-  "curating cohesive colors"
-  "preparing pleasant pixels"
-  "hyping happy hyprland"
-  "integrating intuitive interfaces"
-  "bootstrapping beautiful boxes"
-  "crafting cozy commands"
-  "making machines marvelous"
-  "polishing pretty pixels"
-  "tuning tasteful terminals"
-  "weaving wonderful workflows"
-)
-
 tips=(
-  "Super + Space opens the Omarchy menu for apps, settings, and more"
-  "Super + K shows all the key bindings"
-  "Super is the Windows or command key on your keyboard"
-  "Use Xournal++ to sign PDFs"
-  "Share files with phones and laptops using LocalSend"
-  "Turn any website into an app with Install > Web App in the menu"
-  "Super + Return opens a terminal, Super + Shift + Return the browser"
-  "Edit images with Pinta, videos with Kdenlive, docs with LibreOffice"
-  "Super + Ctrl + Print grabs text off the screen with OCR"
-  "Print takes a screenshot, Alt + Print records the screen"
-  "Set a reminder with Super + Ctrl + R"
-  "Switch themes from Style > Theme in the Omarchy menu"
-  "Double-click the menu bar to make it transparent"
-  "Run a full Windows VM via Install > Windows in the menu"
-  "Super + Ctrl + V opens the clipboard manager"
-  "Super + 1 through 0 switches workspaces, add Shift to bring the window"
-  "Super + Print picks a color from anywhere on screen"
-  "Keep the system fresh with Update in the Omarchy menu"
+  progress.tip.menu
+  progress.tip.keybindings
+  progress.tip.superKey
+  progress.tip.signPdfs
+  progress.tip.localSend
+  progress.tip.webApps
+  progress.tip.terminal
+  progress.tip.media
+  progress.tip.ocr
+  progress.tip.screenshots
+  progress.tip.reminders
+  progress.tip.themes
+  progress.tip.transparentBar
+  progress.tip.windows
+  progress.tip.clipboard
+  progress.tip.workspaces
+  progress.tip.colorPicker
+  progress.tip.update
 )
 
 cleanup() {
@@ -638,16 +630,10 @@ install_progress() {
   return 0
 }
 
-# Keep the original loading messages on their own clock, so progress jumps
-# cannot skip phrases and animation frame rate does not change their cadence.
-current_whimsy() {
-  printf '%s' "${whimsy[$(( (NOW - DASH_T0) / 4 % ${#whimsy[@]} ))]}"
-}
-
 # One tip per 8 seconds, in order. Use elapsed time, since rendering can stretch
 # under pacstrap I/O, when the tips may be the most visible sign of activity.
 current_tip() {
-  printf '%s' "${tips[$(( (NOW - DASH_T0) / 8 % ${#tips[@]} ))]}"
+  t "${tips[$(( (NOW - DASH_T0) / 8 % ${#tips[@]} ))]}"
 }
 
 # Vertically center a block of the given height, echoing the row it starts on.
@@ -673,7 +659,7 @@ measure_progress_layout() {
     scale=$((scale - 1))
   done
   build_icon "$scale"
-  TOP_ROW="$(centered_top_row "$((ICON_HEIGHT + 6))")"
+  TOP_ROW="$(centered_top_row "$((ICON_HEIGHT + 5))")"
   ICON_LEFT=$(( (cols - ICON_WIDTH) / 2 + 1 ))
   (( ICON_LEFT < 1 )) && ICON_LEFT=1
   PROGRESS_TEXT_WIDTH=$((cols - 2))
@@ -700,7 +686,7 @@ update_progress() {
 }
 
 render_dynamic() {
-  local step message tip
+  local step tip
   # The framebuffer can settle late in VMs. Rebuild at the new size, preserving
   # progress, instead of leaving the drawing at the old screen coordinates.
   [[ "$(term_size)" == "$LAST_SIZE" ]] || render_static
@@ -710,11 +696,9 @@ render_dynamic() {
   DISPLAY_PM=$((DISPLAY_PM + step))
   render_icon "$DISPLAY_PM"
 
-  message="$(truncate_for_width "$(current_whimsy)" "$PROGRESS_TEXT_WIDTH")"
-  tip="$(truncate_for_width "Tip: $(current_tip)" "$PROGRESS_TEXT_WIDTH")"
+  tip="$(truncate_for_width "$(t progress.tipLine "$(current_tip)")" "$PROGRESS_TEXT_WIDTH")"
   printf '%s%d;1H' "$CSI" "$((TOP_ROW + ICON_HEIGHT + 1))"
   center "${GREEN}$((DISPLAY_PM / 10))%${RESET}" "$PROGRESS_TEXT_WIDTH"
-  center "${GREEN}${message}${RESET}" "$PROGRESS_TEXT_WIDTH"
   blank_line
   # Same row either way, so the layout (icon + 6 rows) never changes height:
   # blank normally, the verify's honest percent while the pre-flight gate
@@ -759,9 +743,13 @@ install_duration() {
 }
 
 render_finish() {
-  local duration effect_canvas_width title="Installed Omarchy"
+  local duration effect_canvas_width title
   duration="$(install_duration || true)"
-  [[ -n $duration ]] && title+=" in ${duration}"
+  if [[ -n $duration ]]; then
+    title="$(t finish.titleWithTime "$duration")"
+  else
+    title="$(t finish.title)"
+  fi
   # ttfx centers its text two columns right of plain centering. A canvas two
   # columns narrower aligns the animation with the title and fallback logo.
   effect_canvas_width="$(term_cols)"
@@ -897,7 +885,7 @@ reboot_now() {
 }
 
 reboot_prompt() {
-  local prompt_pad
+  local prompt_pad label
 
   # Nobody to confirm; the OMARCHY_UI_AUTO_REBOOT check at the call site still
   # applies, so setting both stops on the finish screen without a keyboard.
@@ -908,13 +896,15 @@ reboot_prompt() {
   # to it as gum allows. FINISH_HEIGHT budgets for the same three rows.
   printf '%s%d;1H%s' "$CSI" "$((FINISH_TOP_ROW + LOGO_HEIGHT + 4))" "$CLEAR_LINE" >"$TTY_PATH"
 
-  prompt_pad=$(( ( $(term_cols) - 18 ) / 2 ))
+  # The button is the label with two columns of padding either side.
+  label="$(t finish.reboot)"
+  prompt_pad=$(( ( $(term_cols) - ${#label} - 8 ) / 2 ))
   (( prompt_pad < 0 )) && prompt_pad=0
   gum confirm \
     --padding "0 0 0 $prompt_pad" \
     --show-help=false \
     --default \
-    --affirmative "Reboot Now" \
+    --affirmative "$label" \
     --negative "" \
     "" <"$TTY_PATH" >"$TTY_PATH" 2>&1
 }
@@ -951,8 +941,8 @@ render_failure_log_tail() {
   fi
   [[ -f $tail_log ]] || return 0
 
-  label="Last log lines:"
-  [[ $tail_log == /mnt/* ]] && label="Last target log lines:"
+  label="$(t failure.logLines)"
+  [[ $tail_log == /mnt/* ]] && label="$(t failure.targetLogLines)"
   line_at "$CONTENT_WIDTH" 2 "${DIM}${label}${RESET}"
   printf '\n'
   tail -n "$lines" "$tail_log" 2>/dev/null | while IFS= read -r line; do
@@ -975,7 +965,7 @@ find_log_uploader() {
 }
 
 prompt_enter() {
-  printf '\nPress Enter to continue…' >"$TTY_PATH"
+  printf '\n%s' "$(t failure.pressEnter)" >"$TTY_PATH"
   IFS= read -r _ <"$TTY_PATH" || true
 }
 
@@ -986,9 +976,9 @@ upload_failure_log() {
     "$uploader" install >"$TTY_PATH" 2>&1 || true
   else
     {
-      echo "No log uploader is available in this environment."
-      echo "Install log: $LOG_FILE"
-      [[ -f /mnt/var/log/omarchy-install.log ]] && echo "Target log: /mnt/var/log/omarchy-install.log"
+      t failure.noUploader; echo
+      t failure.installLog "$LOG_FILE"; echo
+      [[ -f /mnt/var/log/omarchy-install.log ]] && { t failure.targetLog /mnt/var/log/omarchy-install.log; echo; }
     } >"$TTY_PATH"
   fi
   prompt_enter
@@ -1054,8 +1044,8 @@ render_failure() {
   blank_line
   render_logo
   blank_line
-  center "${RED}Omarchy installation stopped${RESET}" "$CONTENT_WIDTH"
-  center "Installer exited with status $status" "$CONTENT_WIDTH"
+  center "${RED}$(t failure.title)${RESET}" "$CONTENT_WIDTH"
+  center "$(t failure.status "$status")" "$CONTENT_WIDTH"
 
   render_media_diagnosis "$media_diagnosis"
 
@@ -1075,12 +1065,13 @@ render_failure() {
   blank_line
   render_failure_log_tail "$(media_diagnosis_rows "$media_diagnosis")"
   blank_line
-  center "${DIM}Get help at https://omarchy.org/discord${RESET}" "$CONTENT_WIDTH"
+  center "${DIM}$(t failure.help https://omarchy.org/discord)${RESET}" "$CONTENT_WIDTH"
   blank_line
 }
 
 failure_menu() {
   local choice uploader
+  local -a choices
 
   [[ ${OMARCHY_UI_FAILURE_ACTION:-} == "exit" ]] && return 0
   # The failure screen and log tail have already rendered; exit with the
@@ -1090,43 +1081,37 @@ failure_menu() {
   while true; do
     uploader=""
     uploader=$(find_log_uploader || true)
-    if [[ -n $uploader ]]; then
-      choice=$(gum choose \
-        --height 6 \
-        --header "What would you like to do?" \
-        "Upload log for support" \
-        "View full log" \
-        "Drop to shell" \
-        "Reboot" \
-        "Power off" \
-        <"$TTY_PATH" 2>"$TTY_PATH") || choice="Drop to shell"
-    else
-      choice=$(gum choose \
-        --height 5 \
-        --header "What would you like to do?" \
-        "View full log" \
-        "Drop to shell" \
-        "Reboot" \
-        "Power off" \
-        <"$TTY_PATH" 2>"$TTY_PATH") || choice="Drop to shell"
-    fi
+    choices=()
+    [[ -n $uploader ]] && choices+=("$(t failure.upload)"$'\t'upload)
+    choices+=(
+      "$(t failure.viewLog)"$'\t'view
+      "$(t failure.shell)"$'\t'shell
+      "$(t failure.reboot)"$'\t'reboot
+      "$(t failure.powerOff)"$'\t'poweroff
+    )
+    choice=$(gum choose \
+      --height "${#choices[@]}" \
+      --label-delimiter $'\t' \
+      --header "$(t failure.menu)" \
+      "${choices[@]}" \
+      <"$TTY_PATH" 2>"$TTY_PATH") || choice="shell"
 
     case "$choice" in
-      "Upload log for support")
+      upload)
         upload_failure_log
         render_failure "${failure_status:-1}" "${failure_summary:-}" "${failure_media_diagnosis:-}" >"$TTY_PATH" 2>/dev/null || true
         ;;
-      "View full log")
+      view)
         view_failure_log
         render_failure "${failure_status:-1}" "${failure_summary:-}" "${failure_media_diagnosis:-}" >"$TTY_PATH" 2>/dev/null || true
         ;;
-      "Reboot")
+      reboot)
         reboot 2>/dev/null || systemctl reboot 2>/dev/null || true
         ;;
-      "Power off")
+      poweroff)
         poweroff 2>/dev/null || systemctl poweroff 2>/dev/null || true
         ;;
-      "Drop to shell"|"")
+      shell | "")
         return 0
         ;;
     esac
@@ -1252,7 +1237,7 @@ if (( finish_render_status != 0 )); then
   dashboard_log "finish screen render failed with status $finish_render_status; using fallback"
   {
     printf '%s%s' "$SHOW_CURSOR" "$CLEAR"
-    printf '\nFinished installing\n\n'
+    printf '\n%s\n\n' "$(t finish.fallback)"
   } >"$TTY_PATH" 2>/dev/null || true
 fi
 

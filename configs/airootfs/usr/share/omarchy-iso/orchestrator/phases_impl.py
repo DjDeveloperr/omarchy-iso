@@ -667,6 +667,8 @@ def arch_install_system(ctx: InstallContext) -> None:
                 info("› applying archinstall application selections")
                 arch.install_applications(installer, config)
 
+            _write_language_marker(ctx)
+
             # Tailscale is bundled in the offline mirror but only installed
             # when an autoinstall drive staged an auth key; must happen here,
             # while the mirror is still bind-mounted, not in the phase that
@@ -1645,6 +1647,19 @@ def _unmask_mkinitcpio_pacman_hooks(
             info(f"warning: failed to restore pacman hook mask for {name}: {exc}")
 
 
+def _write_language_marker(ctx: InstallContext) -> None:
+    """Hand the installer's language to the runtime's finalizers, which
+    generate its locale and set it per user. English writes nothing, so an
+    English install stays exactly what it was."""
+    language = ctx.omarchy_install.get("language")
+    if not language or language == "en":
+        return
+    marker = ctx.target / "etc/omarchy/language"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(language + "\n")
+    marker.chmod(0o644)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Install intent helpers: normalize the Omarchy-specific part of the
 # configurator JSON so full-disk and pre-mounted installs feed the same boot
@@ -2117,8 +2132,6 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str 
         f"OMARCHY_INSTALL_USER={ctx.username}",
         f"OMARCHY_START_TIME={omarchy_start_time}",
         f"OMARCHY_START_EPOCH={omarchy_start_epoch}",
-        f"OMARCHY_USER_NAME={ctx.full_name}",
-        f"OMARCHY_USER_EMAIL={ctx.email}",
         f"OMARCHY_MIRROR={mirror_channel}",
         f"OMARCHY_ISO_REF={_iso_ref()}",
         f"OMARCHY_RUNTIME_PACKAGE={_omarchy_runtime_package()}",
@@ -2126,6 +2139,15 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str 
         f"OMARCHY_NVIM_PACKAGE={_omarchy_nvim_package()}",
         "OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log",
         "OMARCHY_LOG_TO_STDOUT=1",
+        # The install must not wait on a network it may not have. mise reshim
+        # resolves the version list of every tool declared in
+        # /etc/mise/conf.d/omarchy-tools.toml, all of them version = "latest":
+        # offline, each lookup waits out mise's HTTP timeout before falling
+        # back, and the user finalizer measured 40.10 s that way (five tools at
+        # 20 s) on a 65 s install. The tools are lazy, so reshim only needs the
+        # declarations; the first real use of a tool installs it later, with a
+        # network. MISE_OFFLINE blocks every HTTP request.
+        "MISE_OFFLINE=1",
     ]
     if _install_debug_enabled():
         env_extras.append("OMARCHY_INSTALL_DEBUG=1")

@@ -60,8 +60,6 @@ def make_ctx(tmp: Path, omarchy_install: dict) -> InstallContext:
     return InstallContext(
         config_path=tmp / "user_configuration.json",
         creds_path=tmp / "user_credentials.json",
-        full_name="Test User",
-        email="test@example.com",
         encrypt=False,
         authorized_keys_path=None,
         tailscale_authkey_path=None,

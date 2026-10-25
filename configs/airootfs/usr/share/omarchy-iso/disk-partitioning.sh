@@ -195,20 +195,20 @@ install_disk_candidates() {
     sort -k1,1n -k2,2n | cut -f3
 }
 
-# The install modes for the disk screen's choice, the default first. On a disk
-# that already holds partitions ($2 of them) the default is the free-space
-# install, which keeps them; the full-disk install, which erases them, is one
-# key away. $1 is whether the free-space mode is on offer at all (UEFI, a
-# partition table and room for Omarchy).
+# The install modes for the disk screen's choice, the default first, as the
+# names select_installation acts on. On a disk that already holds partitions
+# ($2 of them) the default is the free-space install, which keeps them; the
+# full-disk install, which erases them, is one key away. $1 is whether the
+# free-space mode is on offer at all (UEFI, a partition table and room for
+# Omarchy).
 install_mode_choices() {
   local free_space_offered=$1 partitions=${2:-0}
-  local free_space="Free space install (alongside existing data)"
   if [[ $free_space_offered == true ]] && ((partitions > 0)); then
-    printf '%s\n' "$free_space" "Full disk install"
+    printf '%s\n' free_space full_disk
   elif [[ $free_space_offered == true ]]; then
-    printf '%s\n' "Full disk install" "$free_space"
+    printf '%s\n' full_disk free_space
   else
-    printf '%s\n' "Full disk install"
+    printf '%s\n' full_disk
   fi
-  printf '%s\n' "Choose a different disk"
+  printf '%s\n' other_disk
 }

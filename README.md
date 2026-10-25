@@ -167,8 +167,6 @@ These are the configurator's own output files, so the way to get a starting set 
 |------|----------|---------|
 | `user_configuration.json` | Yes | archinstall config: disk, hostname, timezone, keyboard |
 | `user_credentials.json` | Yes | Username and password hash |
-| `user_full_name.txt` | No | Git full name |
-| `user_email_address.txt` | No | Git email |
 | `user_encrypt_installation.txt` | No | `true` when `user_configuration.json` carries a `disk_encryption` block; defaults to false |
 | `authorized_keys` | No | SSH public keys in sshd's own format, one per line |
 | `tailscale_authkey` | No | Tailscale auth key; the machine joins your tailnet on first boot |
@@ -214,6 +212,16 @@ qm start 101
 Boot order is disk first: the empty disk falls through to the ISO on the first boot, and the installed system boots from disk afterwards. The machine reboots into Omarchy on its own when the install finishes.
 
 Encrypted autoinstalls are not fully unattended — the LUKS passphrase prompt still needs someone at the first boot.
+
+`omarchy_install.language` in `user_configuration.json` takes a code from Omarchy's language registry, like `da` or `ja`, and becomes the installed system's language. Leave it out, or set `en`, for English.
+
+## Translations
+
+The configurator asks for a language first, on the screen that carries the intro and the hidden Ctrl+C entry into preparing the machine for another owner. It offers every language in Omarchy's registry (`default/i18n/locales.json` in the settings package). A language with a catalog in `configs/airootfs/usr/share/omarchy-iso/i18n/` also translates the installer. The others are listed by their English name, the installer stays in English, and the language still goes to the installed system as `/etc/omarchy/language`. The keyboard list then preselects the language's layout from `language-defaults.json`. The timezone list preselects the network's guess, and when that fails, the capital of the language's country from the same file. English, Arabic, Swahili and Tamil have no single home country, so they fall back to the plain timezone search.
+
+Catalogs exist only for languages the live console can draw. The kernel's own console fonts carry just the IBM PC character set, so the installer loads Terminus, patched by `console-font.py` with the half blocks the logo is drawn with. That covers Latin, Greek and Cyrillic. CJK, Arabic, Hebrew, the Indic scripts, Thai and Vietnamese are beyond any 512-glyph console font.
+
+To add a string, put it in `en.json` and print it with `t <key> [args]`, where `%1`, `%2` take the arguments. A catalog that lacks the key shows it in English until a translation lands. `test/unit/test_installer_i18n.py` fails on a key English does not have, on placeholders that differ from English, and on a character the patched font cannot draw. The setup form vendored from Omarchy translates its own strings from Omarchy's catalogs, in the language the configurator names in `OMARCHY_FORM_LANGUAGE`, and takes the keyboard default and the offline timezone through `OMARCHY_FORM_KEYBOARD_DEFAULT` and `OMARCHY_FORM_TIMEZONE_FALLBACK`.
 
 ## Creating the ISO
 
