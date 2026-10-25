@@ -2645,7 +2645,8 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     # records which one it was built with (stock linux on older images).
     prebuilt_kernel_file = ctx.target / "var" / "lib" / "omarchy-iso" / "prebuilt-uki.kernel"
     prebuilt_kernel = prebuilt_kernel_file.read_text().strip() if prebuilt_kernel_file.is_file() else "linux"
-    esp_uki = esp_root / "EFI" / "Linux" / f"omarchy_{prebuilt_kernel}.efi"
+    uki_name = f"{_uki_prefix(ctx.target, config_text)}_{prebuilt_kernel}.efi"
+    esp_uki = esp_root / "EFI" / "Linux" / uki_name
     used_prebuilt_uki = False
 
     # The pre-built UKI was made before any hardware script ran. nvidia.sh and
@@ -2714,7 +2715,7 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
         with _time_step("LIMINE.limine-entry-tool --add-uki (register boot entry)"):
             subprocess.run(
                 ["arch-chroot", str(ctx.target), "limine-entry-tool",
-                 "--add-uki", prebuilt_kernel, f"{esp_path.rstrip('/')}/EFI/Linux/omarchy_{prebuilt_kernel}.efi",
+                 "--add-uki", prebuilt_kernel, f"{esp_path.rstrip('/')}/EFI/Linux/{uki_name}",
                  "--comment", "Pre-built UKI",
                  "--no-mutex", "--no-hooks"],
                 check=True,
@@ -2781,8 +2782,26 @@ def _limine_setting(config_text: str, name: str, fallback: str | None = None) ->
     for line in config_text.splitlines():
         match = pattern.match(line)
         if match:
-            value = _strip_shell_quotes(match.group(1))
+            # The file is sourced by Bash: read the value as it would, quotes
+            # removed and a trailing "# comment" dropped.
+            try:
+                words = shlex.split(match.group(1), comments=True)
+            except ValueError:
+                words = [_strip_shell_quotes(match.group(1))]
+            value = words[0] if words else ""
     return value
+
+
+# limine-mkinitcpio names a UKI <prefix>_<kernel>.efi, the prefix being
+# CUSTOM_UKI_NAME when it is lowercase letters and digits, and the machine id
+# otherwise (resolve_uki_prefix in limine-mkinitcpio-install). Omarchy sets it
+# to omarchy. The pre-built UKI is copied under the same name, and
+# validate_boot looks for it there; _finish_root_image gave the target its id.
+def _uki_prefix(target: Path, config_text: str) -> str:
+    name = _limine_setting(config_text, "CUSTOM_UKI_NAME") or ""
+    if re.fullmatch(r"[a-z0-9]+", name):
+        return name
+    return (target / "etc" / "machine-id").read_text().strip()
 
 
 def _limine_kernel_cmdline(config_text: str) -> str:
@@ -3147,7 +3166,7 @@ def validate_boot(ctx: InstallContext) -> None:
 
     default_limine = ctx.target / "etc" / "default" / "limine"
     config_text = _limine_combined_config_text(ctx, default_limine.read_text())
-    uki_prefix = _limine_setting(config_text, "CUSTOM_UKI_NAME", "omarchy") or "omarchy"
+    uki_prefix = _uki_prefix(ctx.target, config_text)
     kernel = storage.get("kernel") or (ctx.user_configuration.get("kernels") or ["linux-omarchy"])[0]
 
     if arch.has_uefi():

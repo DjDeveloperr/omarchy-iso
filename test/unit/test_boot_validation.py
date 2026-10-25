@@ -83,7 +83,7 @@ class BootValidationTest(unittest.TestCase):
 
     def test_default_limine_overrides_hardware_dropin(self):
         self.disable_uki()
-        self.write("etc/default/limine", 'ENABLE_UKI="yes"\n')
+        self.write("etc/default/limine", 'CUSTOM_UKI_NAME=omarchy\nENABLE_UKI="yes"\n')
         with self.assertRaisesRegex(RuntimeError, "missing or empty"):
             phases.validate_boot(self.ctx)
         self.write("boot/EFI/Linux/omarchy_linux-aarch64.efi", "UKI")

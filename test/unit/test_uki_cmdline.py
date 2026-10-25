@@ -115,7 +115,7 @@ class EmbedBeforeTheHashTest(unittest.TestCase):
         target = Path(self.enterContext(tempfile.TemporaryDirectory()))
         for path, text in {
             "usr/bin/limine-update": "",
-            "etc/default/limine": f'ESP_PATH="/boot"\nKERNEL_CMDLINE[default]+="{self.CMDLINE}"\n',
+            "etc/default/limine": f'ESP_PATH="/boot"\nCUSTOM_UKI_NAME="omarchy"\nKERNEL_CMDLINE[default]+="{self.CMDLINE}"\n',
             "etc/snapper/configs/root": "",
             "boot/limine.conf": "/+Omarchy\n",
             "var/lib/omarchy-iso/prebuilt-uki.kernel": "linux-omarchy\n",
@@ -142,6 +142,60 @@ class EmbedBeforeTheHashTest(unittest.TestCase):
 
         self.assertEqual(len(hashed), 1, "limine-entry-tool --add-uki did not run once")
         self.assertIn(self.CMDLINE.encode(), hashed[0][SECTION:SECTION + ROOM])
+
+
+class PrebuiltUkiNameTest(unittest.TestCase):
+    """The pre-built UKI goes where validate_boot looks for it:
+    <CUSTOM_UKI_NAME>_<kernel>.efi, as limine-mkinitcpio would name it."""
+
+    def test_the_uki_takes_the_configured_name(self):
+        target = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for path, text in {
+            "usr/bin/limine-update": "",
+            "etc/default/limine": 'ESP_PATH="/boot"\nCUSTOM_UKI_NAME="custom"\nKERNEL_CMDLINE[default]+="root=UUID=x rw"\n',
+            "etc/snapper/configs/root": "",
+            "boot/limine.conf": "/+Omarchy\n",
+            "var/lib/omarchy-iso/prebuilt-uki.kernel": "linux-omarchy\n",
+        }.items():
+            (target / path).parent.mkdir(parents=True, exist_ok=True)
+            (target / path).write_text(text)
+        (target / "var/lib/omarchy-iso/prebuilt-uki.efi").write_bytes(with_room())
+
+        registered = []
+
+        def run(cmd, **_kwargs):
+            if "--add-uki" in cmd:
+                registered.append(cmd[cmd.index("--add-uki") + 2])
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        ctx = types.SimpleNamespace(target=target, user_configuration={"kernels": ["linux-omarchy"]})
+        firmware = types.SimpleNamespace(has_uefi=lambda: True)
+        with mock.patch.object(phases_impl.subprocess, "run", run), \
+             mock.patch.object(phases_impl, "arch", firmware), \
+             mock.patch.object(phases_impl, "info", lambda *_: None), \
+             mock.patch.object(phases_impl, "_is_apple_t2_hardware", lambda: False):
+            phases_impl.finalize_limine_boot(ctx)
+
+        self.assertTrue((target / "boot/EFI/Linux/custom_linux-omarchy.efi").is_file())
+        self.assertFalse((target / "boot/EFI/Linux/omarchy_linux-omarchy.efi").exists())
+        self.assertEqual(registered, ["/boot/EFI/Linux/custom_linux-omarchy.efi"])
+
+    def test_without_a_valid_name_the_machine_id_names_it(self):
+        target = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (target / "etc").mkdir()
+        (target / "etc/machine-id").write_text("0123456789abcdef0123456789abcdef\n")
+        for config, prefix in [
+            ('CUSTOM_UKI_NAME="omarchy"\n', "omarchy"),
+            ("", "0123456789abcdef0123456789abcdef"),
+            ('CUSTOM_UKI_NAME=""\n', "0123456789abcdef0123456789abcdef"),
+            # limine-mkinitcpio warns and falls back for anything but a-z0-9.
+            ('CUSTOM_UKI_NAME="My-Omarchy"\n', "0123456789abcdef0123456789abcdef"),
+            # Bash drops a trailing comment, quoted value or not.
+            ("CUSTOM_UKI_NAME=omarchy # custom name\n", "omarchy"),
+            ('CUSTOM_UKI_NAME="omarchy" # custom name\n', "omarchy"),
+        ]:
+            with self.subTest(config=config):
+                self.assertEqual(phases_impl._uki_prefix(target, config), prefix)
 
 
 if __name__ == "__main__":
