@@ -15,6 +15,15 @@
 # The backing mounts stay under /run, which switch_root carries into the new
 # root, so the loop device keeps its file for as long as the system runs.
 
+# Never fall through to the live installer: someone picked Try, and the live
+# system would start an install (an unattended one when a cidata drive is
+# attached). A shell to look around in, then a reboot.
+try_failed() {
+    err "Try Omarchy: $1. Nothing has been installed; the machine restarts when you leave this shell."
+    launch_interactive_shell
+    reboot -f
+}
+
 run_latehook() {
     local base sfs layer upper loop
     [ "$(getarg omarchy.try)" = "1" ] || return 0
@@ -25,8 +34,7 @@ run_latehook() {
     sfs="$base/omarchy-root.sfs"
     layer="$base/omarchy-try.sfs"
     if [ ! -f "$sfs" ] || [ ! -f "$layer" ]; then
-        err "Try Omarchy: $sfs or $layer is missing; starting the installer instead"
-        return 0
+        try_failed "$sfs or $layer is missing"
     fi
 
     mkdir -p /run/omarchy-try/sfs /run/omarchy-try/image /run/omarchy-try/layer /run/omarchy-try/rw
@@ -35,9 +43,7 @@ run_latehook() {
         ! loop="$(losetup --find --show --read-only -- /run/omarchy-try/sfs/omarchy-root.img)" ||
         ! mount -t btrfs -o ro,subvol=omarchy-root "$loop" /run/omarchy-try/image ||
         ! mount -t squashfs -o ro,loop "$layer" /run/omarchy-try/layer; then
-        err "Try Omarchy: could not mount the root image"
-        launch_interactive_shell
-        return 1
+        try_failed "could not mount the root image"
     fi
 
     # Half of RAM for what the session writes; tmpfs takes pages only as they
@@ -48,9 +54,9 @@ run_latehook() {
 
     # archiso's own root: its live environment over a tmpfs. Nothing has run
     # from it yet.
-    umount /new_root || { err "Try Omarchy: could not unmount the live root"; launch_interactive_shell; return 1; }
+    umount /new_root || try_failed "could not unmount the live root"
     mount -t overlay omarchy-try \
         -o "lowerdir=/run/omarchy-try/layer:/run/omarchy-try/image,upperdir=$upper/upper,workdir=$upper/work,index=off,metacopy=off,redirect_dir=off" \
-        /new_root || { err "Try Omarchy: could not mount the session root"; launch_interactive_shell; return 1; }
+        /new_root || try_failed "could not mount the session root"
     msg ":: Try Omarchy: booting the root image from the medium"
 }
