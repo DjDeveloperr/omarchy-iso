@@ -366,6 +366,20 @@ def _verify_nested_subvolumes(subvols: list[dict]) -> None:
                 f"root image install cannot place subvolume {name} at {mountpoint}: "
                 f"a subvolume inside {parent} must be mounted at {expected}"
             )
+        # An extra subvolume mounted between the two takes the image's files
+        # there, this one's included (@/var/lib under a separate /var).
+        between = [
+            other for other, other_mountpoint in where.items()
+            if other not in (name, parent, "@") and other not in CONFIGURATOR_SUBVOLUMES
+            and mountpoint.is_relative_to(other_mountpoint) and other_mountpoint != mountpoint
+            and other_mountpoint.is_relative_to(where[parent]) and other_mountpoint != where[parent]
+        ]
+        if between:
+            raise RuntimeError(
+                f"root image install cannot place subvolume {name} at {mountpoint}: "
+                f"{between[0]} is mounted between it and {parent}; it must be mounted at "
+                f"{mountpoint} inside {between[0]} instead"
+            )
 
 
 # The subvolumes the configurator creates on the btrfs it hands over.

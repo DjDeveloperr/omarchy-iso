@@ -69,8 +69,14 @@ class VerifyRootImageLayoutTest(unittest.TestCase):
         phases_impl.verify_root_image_layout(with_subvolumes(("@/srv/data", "/srv/data")))
         phases_impl.verify_root_image_layout(with_subvolumes(("@data", "/srv"), ("@data/x", "/srv/x")))
         phases_impl.verify_root_image_layout(with_subvolumes(("@var", "/var"), ("@.snapshots", "/.snapshots")))
+        # Also allowed: an extra subvolume between a nested one and its name's
+        # parent only when that extra is the parent itself.
+        phases_impl.verify_root_image_layout(with_subvolumes(("@var", "/var"), ("@var/lib", "/var/lib")))
+        phases_impl.verify_root_image_layout(with_subvolumes(("@/var/log/journal", "/var/log/journal")))
         for extra in ((("@/srv/data", "/srv"),), (("@/usr", "/opt"), ("@system/usr", "/usr")),
-                      (("@data", "/srv"), ("@data/x", "/opt/x"))):
+                      (("@data", "/srv"), ("@data/x", "/opt/x")),
+                      # @/var/lib lives in @'s /var, which @systems/.../var takes away.
+                      (("@systems/linux/root/var", "/var"), ("@/var/lib", "/var/lib"))):
             with self.subTest(extra=extra), self.assertRaisesRegex(RuntimeError, "must be mounted at"):
                 phases_impl.verify_root_image_layout(with_subvolumes(*extra))
 
