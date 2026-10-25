@@ -333,13 +333,39 @@ def verify_root_image_layout(disk_config: dict) -> None:
         for part in mod.get("partitions") or []:
             if part.get("fs_type") != "btrfs":
                 continue
-            for subvol in part.get("btrfs") or []:
+            subvols = part.get("btrfs") or []
+            for subvol in subvols:
                 if subvol.get("mountpoint") == "/" and subvol.get("name") in ("@", "/@"):
+                    _verify_nested_subvolumes(subvols)
                     return
     raise RuntimeError(
         "root image install needs the target root on a btrfs @ subvolume; "
         "disk_config mounts / from no such subvolume"
     )
+
+
+def _verify_nested_subvolumes(subvols: list[dict]) -> None:
+    """A subvolume named inside another one (@/srv/data, @data/x) is made at
+    that path after the image write and given the image's files under its
+    mountpoint (_place_root_image). That only works where the path and the
+    mountpoint agree: @/srv/data mounted at /srv would be copied into itself,
+    and @/usr mounted at /opt would take the place of the image's /usr."""
+    where = {
+        str(sv["name"]).strip("/"): Path(sv["mountpoint"])
+        for sv in subvols
+        if sv.get("name") and sv.get("mountpoint")
+    }
+    for name, mountpoint in where.items():
+        parents = [other for other in where if name.startswith(other + "/")]
+        if not parents:
+            continue
+        parent = max(parents, key=len)
+        expected = where[parent] / name[len(parent) + 1:]
+        if mountpoint != expected:
+            raise RuntimeError(
+                f"root image install cannot place subvolume {name} at {mountpoint}: "
+                f"a subvolume inside {parent} must be mounted at {expected}"
+            )
 
 
 # The subvolumes the configurator creates on the btrfs it hands over.

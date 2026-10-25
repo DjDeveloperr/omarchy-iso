@@ -56,6 +56,24 @@ class VerifyRootImageLayoutTest(unittest.TestCase):
         phases_impl.verify_root_image_layout(btrfs_root_layout())
         phases_impl.verify_root_image_layout(btrfs_root_layout(name="/@"))
 
+    def test_nested_subvolume_must_sit_at_its_mountpoint(self):
+        # A subvolume named inside another is made at that path after the image
+        # write, so a mountpoint elsewhere would make it copy into itself or
+        # take another mountpoint's files: refused before the disk is touched.
+        def with_subvolumes(*extra):
+            layout = btrfs_root_layout()
+            layout["device_modifications"][0]["partitions"][1]["btrfs"] += [
+                {"name": name, "mountpoint": mountpoint} for name, mountpoint in extra]
+            return layout
+
+        phases_impl.verify_root_image_layout(with_subvolumes(("@/srv/data", "/srv/data")))
+        phases_impl.verify_root_image_layout(with_subvolumes(("@data", "/srv"), ("@data/x", "/srv/x")))
+        phases_impl.verify_root_image_layout(with_subvolumes(("@var", "/var"), ("@.snapshots", "/.snapshots")))
+        for extra in ((("@/srv/data", "/srv"),), (("@/usr", "/opt"), ("@system/usr", "/usr")),
+                      (("@data", "/srv"), ("@data/x", "/opt/x"))):
+            with self.subTest(extra=extra), self.assertRaisesRegex(RuntimeError, "must be mounted at"):
+                phases_impl.verify_root_image_layout(with_subvolumes(*extra))
+
     def test_lvm_rejected(self):
         layout = btrfs_root_layout()
         layout["lvm_config"] = {"config_type": "default", "vol_groups": []}
