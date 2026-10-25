@@ -16,29 +16,47 @@ WORKFLOW="$ROOT/.github/workflows/install-test.yml"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# The step that names this artifact: from its "- " line to the next line
-# indented no deeper.
-step_of() {
+# Every step that names this artifact, each from its "- " line to the next
+# line indented no deeper, separated by a line holding "--".
+steps_of() {
   awk -v name="$1" '
-    match($0, /^ *- /) { if (keep) exit; indent = RLENGTH - 2; block = "" }
-    keep && $0 !~ /^ *$/ { match($0, /^ */); if (RLENGTH <= indent) exit }
-    { block = block $0 "\n" }
-    index($0, "name: " name) { keep = 1 }
-    END { if (keep) printf "%s", block }
+    function flush() { if (keep) printf "%s--\n", block; keep = 0 }
+    match($0, /^ *- /) { flush(); indent = RLENGTH - 2; block = ""; open = 1 }
+    open && $0 !~ /^ *$/ && !match($0, /^ *- /) { match($0, /^ */); if (RLENGTH <= indent) { flush(); open = 0 } }
+    open { block = block $0 "\n" }
+    open && index($0, "name: " name) { keep = 1 }
+    END { flush() }
   ' "$WORKFLOW"
 }
 
 isos=$(sed -nE 's/^ *name: (iso-.*)$/\1/p' "$WORKFLOW")
 # The build's own name ends in its architecture's expression, the install
 # jobs' in the architecture itself.
-upload=$(grep -vE -- '-(x86_64|aarch64)$' <<<"$isos") || fail "the build uploads no per-architecture ISO artifact"
-[[ $(grep -c "" <<<"$upload") == 1 ]] || fail "more than one ISO upload: $upload"
+# One name, which a runner's own artifact step (Namespace's or GitHub's)
+# may upload under.
+upload=$(grep -vE -- '-(x86_64|aarch64)$' <<<"$isos" | sort -u) || fail "the build uploads no per-architecture ISO artifact"
+[[ $(grep -c "" <<<"$upload") == 1 ]] || fail "more than one ISO upload name: $upload"
 grep -F 'run_attempt' <<<"$isos" && fail "an ISO artifact name carries the attempt, which a partial re-run's install jobs never find"
 for arch in x86_64 aarch64; do
   want=${upload%-*}-$arch
   grep -Fxq "$want" <<<"$isos" || fail "no install job fetches $want, the ISO the $arch build uploads"
 done
-step_of "$upload" | grep -Eq '^ *overwrite: true$' || fail "a build that runs again cannot replace its ISO"
+uploads=$(steps_of "$upload")
+[[ $(grep -c '^--$' <<<"$uploads") -ge 1 ]] || fail "no step uploads $upload"
+[[ $(grep -cE '^ *overwrite: true$' <<<"$uploads") == $(grep -c '^--$' <<<"$uploads") ]] \
+  || fail "an ISO upload step cannot replace its ISO when a build runs again"
+
+# Namespace's artifact actions only work on Namespace's runners. A step that
+# uses one runs only for a trusted author, or in a job that is on Namespace
+# whoever the author is; GitHub's runner keeps GitHub's actions.
+awk '
+  /^  [A-Za-z0-9_-]+:$/ { job = $1; ns = 0 }
+  /^    runs-on: namespace-profile-/ { ns = 1 }
+  match($0, /^ *- /) { trusted = 0 }
+  /^ *if: needs\.trust\.outputs\.trusted == .true.$/ { trusted = 1 }
+  /^ *(- )?uses: namespace-actions\// && !trusted && !ns { print job " " $0; bad = 1 }
+  END { exit bad }
+' "$WORKFLOW" || fail "a Namespace artifact step can run on GitHub's runner (above)"
 
 # Every test-result artifact keeps the run and the attempt, as the comment
 # workflow reads them.
