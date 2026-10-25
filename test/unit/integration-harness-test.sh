@@ -166,23 +166,23 @@ fi
 echo "ok - the live ISO is typed into as us under a uk install"
 
 # The factory first boot's keyboard step takes English (US) and loads it,
-# so what the form asks for next is typed as us: on uk keys, the email
-# arrives as test"omarchy.org.
+# so what the form asks for next is typed as us: on uk keys, a password
+# with an @ arrives with a " in its place.
 take_from "$ROOT/test/integration.d/factory-reset-test.sh" drive_first_boot
 take type_text
 KB_LAYOUT=uk TYPE_LAYOUT=uk GUEST_HOSTNAME=omarchy-test
 wait_for_screen() { true; }
-printf '%s\n' "Select keyboard layout" "Username" "Password" "Confirm password" "Full name" \
-  "Email address" "Hostname" "Timezone" "Does this look right?" >"$work/screens"
+printf '%s\n' "Select keyboard layout" "Username" "Password" "Confirm password" \
+  "Hostname" "Timezone" "Does this look right?" >"$work/screens"
 ocr_screen() { # each form screen once, in order
   head -n1 "$work/screens"
   sed -i 1d "$work/screens"
 }
 : >"$work/pressed"
-run drive_first_boot
+GUEST_PASSWORD=pass@word run drive_first_boot
 ((status == 0)) || fail "the first-boot form stopped under uk: $(tail -n3 "$work/out")"
-grep -qx shift-2 "$work/pressed" || fail "the email's @ was not typed as us after the keyboard step: $(paste -sd' ' "$work/pressed")"
-! grep -qx shift-apostrophe "$work/pressed" || fail "the email's @ was typed on its uk key after the form loaded us"
+grep -qx shift-2 "$work/pressed" || fail "the password's @ was not typed as us after the keyboard step: $(paste -sd' ' "$work/pressed")"
+! grep -qx shift-apostrophe "$work/pressed" || fail "the password's @ was typed on its uk key after the form loaded us"
 echo "ok - the factory first boot is typed into as us after its keyboard step"
 
 # ------------------------------------------- the boot wait unlocks the disk

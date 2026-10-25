@@ -997,7 +997,8 @@ resolve_expected_packages() {
   local base_list=${1:-}
   local resolve_root=/tmp/omarchy-expected-packages
   local image_count resolved
-  # The image holds no kernel; the delta installs the build's own.
+  # The kernel an install gets: --needed counts nothing for it while the
+  # image carries it, and a kernel no install gets would count one more.
   local -a targets=("$OMARCHY_KERNEL")
   if [[ -n $base_list ]]; then
     mapfile -t -O 1 targets < <(

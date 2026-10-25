@@ -2,10 +2,10 @@
 #
 # The installer's progress bar divides by the package count the build resolves
 # for a target install: the root image's packages plus what the per-machine
-# delta adds. The image holds no kernel (build-root-image.sh), so the delta's
-# kernel is the build's OMARCHY_KERNEL on every architecture. Counting stock
-# `linux` on x86_64 resolves a kernel no install gets, and aborts the build the
-# day the offline mirror stops carrying it.
+# delta adds. The kernel an install gets is the build's OMARCHY_KERNEL on every
+# architecture (the image carries it, so --needed adds nothing for it).
+# Counting stock `linux` on x86_64 adds a kernel no install gets, and aborts
+# the build the day the offline mirror stops carrying it.
 
 set -euo pipefail
 
