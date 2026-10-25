@@ -223,7 +223,9 @@ language="en"
 
 # The setup form takes its language and defaults from the language picked here:
 # the layout that goes with it, and its country's capital for when the network
-# cannot guess a timezone.
+# cannot guess a timezone. A language with no single country (English, Arabic,
+# Swahili, Tamil) falls back to UTC: with no fallback the form opens a search,
+# where Enter takes the first zone, Africa/Abidjan.
 LANGUAGE_DEFAULTS="${LANGUAGE_DEFAULTS:-$OMARCHY_ISO_SHARE/language-defaults.json}"
 
 language_default() {
@@ -235,6 +237,7 @@ set_form_language() {
   OMARCHY_FORM_KEYBOARD_DEFAULT=$(language_default keyboard)
   OMARCHY_FORM_KEYBOARD_DEFAULT=${OMARCHY_FORM_KEYBOARD_DEFAULT:-English (US)}
   OMARCHY_FORM_TIMEZONE_FALLBACK=$(language_default timezone)
+  OMARCHY_FORM_TIMEZONE_FALLBACK=${OMARCHY_FORM_TIMEZONE_FALLBACK:-UTC}
   export OMARCHY_FORM_LANGUAGE OMARCHY_FORM_KEYBOARD_DEFAULT OMARCHY_FORM_TIMEZONE_FALLBACK
 }
 

@@ -362,7 +362,9 @@ ocr_screen() {
 
   screendump "$shot"
   [[ -s $shot ]] || return 0
-  magick "$shot" -colorspace gray -negate -resize 150% "$prepped" 2>/dev/null || return 0
+  # Black on white: the negated grays alone read the focused button on the
+  # finished install, dark text on a light bar, as "Reboot Nou".
+  magick "$shot" -colorspace gray -negate -resize 150% -threshold 50% "$prepped" 2>/dev/null || return 0
   tesseract "$prepped" - --psm 6 2>/dev/null || true
 }
 
