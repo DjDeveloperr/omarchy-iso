@@ -736,21 +736,55 @@ def _findmnt_mounts(root: Path) -> list[dict]:
     return flat
 
 
-def _target_subvolumes(mounts: list[dict], device: str) -> list[str]:
-    """The subvolumes to make again after the image write: the
-    configurator's @home, @log and @pkg, and every other one the target
-    mounted from device, which an autoinstall layout can add (@srv,
-    @.snapshots). Not @: that one is the image's."""
-    names = ["@home", "@log", "@pkg"]
+# The subvolumes the configurator mounts besides @. They are made again empty
+# after the image write, as archinstall made them.
+CONFIGURATOR_SUBVOLUMES = ("@home", "@log", "@pkg")
+
+
+def _extra_subvolumes(mounts: list[dict], target: Path, device: str) -> list[tuple[str, Path]]:
+    """Every other subvolume the target mounted from device, which an
+    autoinstall layout can add (@srv, @.snapshots, @var, @/srv/data), as
+    (name, mountpoint relative to the target root), parent names first."""
+    found: dict[str, Path] = {}
     for mount in mounts:
         if mount["fstype"] != "btrfs" or (mount["source"] or "").split("[")[0] != device:
             continue
         for opt in (mount["options"] or "").split(","):
             if opt.startswith("subvol="):
                 name = opt[len("subvol="):].strip("/")
-                if name and name != "@" and name not in names:
-                    names.append(name)
-    return names
+                if name and name != "@" and name not in CONFIGURATOR_SUBVOLUMES:
+                    found.setdefault(name, Path(mount["target"]).relative_to(target))
+    return sorted(found.items(), key=lambda item: item[0].count("/"))
+
+
+def _make_subvolume_with_image_files(top: Path, name: str, content: Path) -> None:
+    """Make subvolume name under top holding what content holds, and leave
+    content an empty directory to mount it on. The image wrote the files
+    under that mountpoint into @; a subvolume made empty and mounted over
+    them would hide them (a separate /var hides the package database). A
+    name already present as a plain directory, one nested in @, is moved
+    aside first and its files brought back in. cp --reflink shares the
+    extents, so nothing is copied on the disk."""
+    dest = top / name
+    staged = None
+    if dest.exists():
+        staged = dest.with_name(dest.name + ".omarchy-image")
+        dest.rename(staged)
+        if content == dest:
+            content = staged
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["btrfs", "subvolume", "create", str(dest)], check=True, capture_output=True)
+    if content.is_dir():
+        entries = list(content.iterdir())
+        if entries:
+            subprocess.run(["cp", "-a", "--reflink=always", f"{content}/.", str(dest)], check=True)
+            for entry in entries:
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+    if staged is not None:
+        shutil.rmtree(staged)
 
 
 def _remount_option_string(options: str) -> str:
@@ -952,11 +986,10 @@ def _place_root_image(ctx: InstallContext) -> None:
         with _time_step("F1.mv_omarchy-root_to_@"):
             image_subvol.rename(at_subvol)
 
-        with _time_step("F1.create_subvolumes"):
-            for name in _target_subvolumes(mounts, device):
+        with _time_step("F1.create_@home_@log_@pkg"):
+            for name in CONFIGURATOR_SUBVOLUMES:
                 p = top / name
                 if not p.exists():
-                    p.parent.mkdir(parents=True, exist_ok=True)
                     subprocess.run(["btrfs", "subvolume", "create", str(p)],
                                    check=True, capture_output=True)
 
@@ -965,6 +998,20 @@ def _place_root_image(ctx: InstallContext) -> None:
             log_subvol = top / "@log"
             if image_log.is_file() and log_subvol.is_dir():
                 shutil.copy2(image_log, log_subvol / "pacman.log")
+
+        # An autoinstall layout's own subvolumes take the image's files under
+        # their mountpoints along. Those files are in @, or in a subvolume
+        # already placed here whose mountpoint is the nearest one above.
+        with _time_step("F1.place_extra_subvolumes"):
+            placed: list[tuple[Path, str]] = []
+            for name, mountpoint in _extra_subvolumes(mounts, target, device):
+                under, rest, depth = "@", mountpoint, -1
+                for placed_mountpoint, placed_name in placed:
+                    if mountpoint.is_relative_to(placed_mountpoint) and len(placed_mountpoint.parts) > depth:
+                        under, rest = placed_name, mountpoint.relative_to(placed_mountpoint)
+                        depth = len(placed_mountpoint.parts)
+                _make_subvolume_with_image_files(top, name, top / under / rest)
+                placed.append((mountpoint, name))
     finally:
         subprocess.run(["umount", str(top)], check=False)
 

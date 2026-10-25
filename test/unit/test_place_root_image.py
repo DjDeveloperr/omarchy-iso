@@ -8,6 +8,7 @@ and the layout left behind (@ from the image, @home/@log/@pkg, pacman.log in
 @log, the target's mounts restored). finalize_boot_and_user runs its two
 branches at once, waits for both, and raises the first failure."""
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,7 @@ class InstallRootImageDdTest(unittest.TestCase):
              "options": "rw,noatime,subvolid=257,subvol=/@home"},
         ]
         self.calls = []
+        self.image_files = []
 
     def fake_run(self, argv, **kwargs):
         argv = [str(a) for a in argv]
@@ -53,8 +55,14 @@ class InstallRootImageDdTest(unittest.TestCase):
             log = Path(argv[4]) / phases_impl.ROOT_IMAGE_SUBVOLUME / "var/log/pacman.log"
             log.parent.mkdir(parents=True)
             log.write_text("[2026-01-01] installed base\n")
+            for name in self.image_files:
+                f = Path(argv[4]) / phases_impl.ROOT_IMAGE_SUBVOLUME / name
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(name)
         elif argv[:3] == ["btrfs", "subvolume", "create"]:
             Path(argv[3]).mkdir()
+        elif argv[:3] == ["cp", "-a", "--reflink=always"]:
+            shutil.copytree(argv[3].removesuffix("/."), argv[4], symlinks=True, dirs_exist_ok=True)
         elif self.fail_on and argv[: len(self.fail_on)] == self.fail_on:
             raise subprocess.CalledProcessError(1, argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -131,6 +139,38 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertNotIn(str(top / "@"), created)
         last_create = max(i for i, c in enumerate(self.calls) if c[:3] == ["btrfs", "subvolume", "create"])
         self.assertLess(last_create, self.index(["mount", "-o", "rw,noatime,subvol=/@srv"]))
+
+    def test_a_subvolume_over_image_files_takes_them_along(self):
+        # A separate /var made empty and mounted over the image would hide its
+        # package database: the image's files under the mountpoint move into
+        # the new subvolume, and the mountpoint is left empty in @.
+        self.image_files = ["var/lib/pacman/local/base-3-3/desc", "var/lib/systemd/random-seed"]
+        self.mounts.append(
+            {"target": str(self.target / "var"), "source": f"{DEVICE}[/@var]", "fstype": "btrfs",
+             "options": "rw,noatime,subvolid=262,subvol=/@var"})
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((top / "@var" / "lib/pacman/local/base-3-3/desc").read_text(),
+                         "var/lib/pacman/local/base-3-3/desc")
+        self.assertTrue((top / "@var" / "lib/systemd/random-seed").is_file())
+        self.assertTrue((top / "@" / "var").is_dir())
+        self.assertEqual(list((top / "@" / "var").iterdir()), [])
+        # @log stays as it was: pacman.log copied, nothing moved out of @.
+        self.assertEqual((top / "@log" / "pacman.log").read_text(), "[2026-01-01] installed base\n")
+
+    def test_a_subvolume_named_inside_at_becomes_one(self):
+        # A name nested in @ (@/srv/data) is a plain directory in the image;
+        # it becomes a subvolume holding what that directory held.
+        self.image_files = ["srv/data/readme"]
+        self.mounts.append(
+            {"target": str(self.target / "srv/data"), "source": f"{DEVICE}[/@/srv/data]", "fstype": "btrfs",
+             "options": "rw,noatime,subvolid=263,subvol=/@/srv/data"})
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        created = [c[3] for c in self.calls if c[:3] == ["btrfs", "subvolume", "create"]]
+        self.assertIn(str(top / "@/srv/data"), created)
+        self.assertEqual((top / "@/srv/data/readme").read_text(), "srv/data/readme")
+        self.assertEqual(sorted(p.name for p in (top / "@/srv").iterdir()), ["data"])
 
     def test_a_refused_image_goes_through_the_pipe(self):
         self.install(frames_written=False)
