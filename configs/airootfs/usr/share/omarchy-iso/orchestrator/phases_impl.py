@@ -730,6 +730,23 @@ def _findmnt_mounts(root: Path) -> list[dict]:
     return flat
 
 
+def _target_subvolumes(mounts: list[dict], device: str) -> list[str]:
+    """The subvolumes to make again after the image write: the
+    configurator's @home, @log and @pkg, and every other one the target
+    mounted from device, which an autoinstall layout can add (@srv,
+    @.snapshots). Not @: that one is the image's."""
+    names = ["@home", "@log", "@pkg"]
+    for mount in mounts:
+        if mount["fstype"] != "btrfs" or (mount["source"] or "").split("[")[0] != device:
+            continue
+        for opt in (mount["options"] or "").split(","):
+            if opt.startswith("subvol="):
+                name = opt[len("subvol="):].strip("/")
+                if name and name != "@" and name not in names:
+                    names.append(name)
+    return names
+
+
 def _remount_option_string(options: str) -> str:
     # subvolid refers to the subvolume replaced here; subvol= names it.
     return ",".join(opt for opt in options.split(",") if not opt.startswith("subvolid="))
@@ -911,11 +928,11 @@ def _place_root_image(ctx: InstallContext) -> None:
         _wait_for_blkid_uuid(device)
 
     # Give the filesystem the layout archinstall's fstab expects. The write
-    # replaced the empty @, @home, @log and @pkg subvolumes archinstall had
-    # created, and the image holds a single subvolume named
-    # ROOT_IMAGE_SUBVOLUME: rename that one to @ and create the others again.
-    # Then grow the filesystem, which was shrunk for the ISO, to fill the
-    # partition.
+    # replaced the empty subvolumes archinstall had created (@, @home, @log,
+    # @pkg, and whatever else an autoinstall layout named), and the image
+    # holds a single subvolume named ROOT_IMAGE_SUBVOLUME: rename that one to
+    # @ and create the others again. Then grow the filesystem, which was
+    # shrunk for the ISO, to fill the partition.
     top = ctx.state_dir / "image-top"
     top.mkdir(parents=True, exist_ok=True)
     with _time_step("F1.mount_top_for_reshape"):
@@ -929,10 +946,11 @@ def _place_root_image(ctx: InstallContext) -> None:
         with _time_step("F1.mv_omarchy-root_to_@"):
             image_subvol.rename(at_subvol)
 
-        with _time_step("F1.create_@home_@log_@pkg"):
-            for name in ("@home", "@log", "@pkg"):
+        with _time_step("F1.create_subvolumes"):
+            for name in _target_subvolumes(mounts, device):
                 p = top / name
                 if not p.exists():
+                    p.parent.mkdir(parents=True, exist_ok=True)
                     subprocess.run(["btrfs", "subvolume", "create", str(p)],
                                    check=True, capture_output=True)
 

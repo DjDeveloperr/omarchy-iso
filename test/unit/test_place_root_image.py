@@ -110,6 +110,28 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertIn("subvol=/@", remounts[0][2])
         self.assertNotIn("subvolid=", remounts[0][2])
 
+    def test_an_autoinstall_layouts_own_subvolumes_come_back(self):
+        # An autoinstall drive can lay the btrfs out with more than the
+        # configurator's four. The image write replaces them all, so each one
+        # the target had mounted from this device is made again before its
+        # mount returns; the ESP, another device, is left to its own mount.
+        self.mounts += [
+            {"target": str(self.target / "srv"), "source": f"{DEVICE}[/@srv]", "fstype": "btrfs",
+             "options": "rw,noatime,subvolid=260,subvol=/@srv"},
+            {"target": str(self.target / ".snapshots"), "source": f"{DEVICE}[/@.snapshots]",
+             "fstype": "btrfs", "options": "rw,noatime,subvolid=261,subvol=/@.snapshots"},
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+        ]
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        for name in ("@home", "@log", "@pkg", "@srv", "@.snapshots"):
+            self.assertTrue((top / name).is_dir(), name)
+        created = [c[3] for c in self.calls if c[:3] == ["btrfs", "subvolume", "create"]]
+        self.assertNotIn(str(top / "@"), created)
+        last_create = max(i for i, c in enumerate(self.calls) if c[:3] == ["btrfs", "subvolume", "create"])
+        self.assertLess(last_create, self.index(["mount", "-o", "rw,noatime,subvol=/@srv"]))
+
     def test_a_refused_image_goes_through_the_pipe(self):
         self.install(frames_written=False)
         self.assertLess(self.index(["frames"]), self.index(["pipe"]))
