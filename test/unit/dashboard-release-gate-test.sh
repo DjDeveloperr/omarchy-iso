@@ -108,7 +108,9 @@ scenario() { # function-to-call, release_rc  ->  sets TTY_OUT, LOG_OUT, CALLS
     export BOX
     PATH="$BOX/bin:$PATH"
     exec 9>"$BOX/tty.fifo"
-    OMARCHY_DASHBOARD_TTY="$BOX/tty.fifo" OMARCHY_PATH="$BOX/omarchy" \
+    # The definitions run from $BOX, so the catalog is not next to them.
+    INSTALLER_I18N="$ROOT/configs/airootfs/usr/share/omarchy-iso/i18n.sh" \
+      OMARCHY_DASHBOARD_TTY="$BOX/tty.fifo" OMARCHY_PATH="$BOX/omarchy" \
       source "$BOX/dashboard-defs.sh" "$BOX/install.log" "$BOX/state.json" -- true
     release_target
     echo "$TARGET_RELEASED" >"$BOX/released"

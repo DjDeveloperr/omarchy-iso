@@ -210,7 +210,7 @@ echo "ok - fake PCI devices stay up as long as their VM, and stop after it"
     case $1 in
       "installation mode") picking=true ;;
       "of free space")
-        [[ $choice == "Free space install"* ]] || fail "free-space harness selected $choice"
+        [[ $choice == free_space ]] || fail "free-space harness selected $choice"
         ;;
     esac
   }
