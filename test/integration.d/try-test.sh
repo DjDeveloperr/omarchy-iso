@@ -27,6 +27,22 @@ pick_try() {
   press ret
 }
 
+# Omarchy's first-login notifications: any of them is the desktop. They are
+# light text on dark cards over the wallpaper, which the harness's
+# thresholded OCR turns to noise once the wallpaper is up; read the plain
+# screendump instead.
+wait_for_desktop() {
+  local shot="$RUN_DIR/.desktop.ppm" waited=0
+  until screendump "$shot" && tesseract "$shot" - 2>/dev/null | grep -qi "Keybindings\|Setup Git\|Update System"; do
+    if ! vm_running || ((waited >= 300)); then
+      capture_console "failure-try-desktop"
+      return 1
+    fi
+    sleep 3
+    ((waited += 3))
+  done
+}
+
 # In the session's environment, for hyprctl.
 try_ssh() {
   ssh_guest "export XDG_RUNTIME_DIR=/run/user/\$(id -u) \
@@ -49,8 +65,7 @@ start_vm "$disk" "$RUN_DIR/serial.log" \
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
   -device ide-cd,drive=cdrom0,bootindex=2
 check "GRUB offers Try Omarchy within its countdown" pick_try
-# Omarchy's first-login notifications: any of them is the desktop.
-check "Try Omarchy reaches the desktop" wait_for_screen "Keybindings\|Setup Git\|Update System" 300
+check "Try Omarchy reaches the desktop" wait_for_desktop
 capture_console "success-try-desktop"
 
 mkdir -p "$BASE_DIR/www"
