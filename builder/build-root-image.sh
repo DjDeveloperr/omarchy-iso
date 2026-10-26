@@ -421,7 +421,7 @@ fi
 # The Try layer is built against the finished image, before the shrink: it
 # only reads the image, through an overlay whose upper directory it keeps.
 if [[ -n ${OMARCHY_TRY_LAYER:-} ]]; then
-  bash /builder/build-try-layer.sh "$root" "$OMARCHY_TRY_LAYER" "${OMARCHY_TRY_CHANNEL:-stable}"
+  bash /builder/build-try-layer.sh "$root" "$OMARCHY_TRY_LAYER" "${OMARCHY_TRY_CHANNEL:-stable}" "$pacman_conf"
 fi
 
 # The image is the loop backing file itself: the same on-disk bytes, written

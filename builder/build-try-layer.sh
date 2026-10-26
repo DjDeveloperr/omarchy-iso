@@ -5,11 +5,13 @@
 # hooks/omarchy_try). The image itself stays exactly the bytes an install
 # writes; this layer goes on top of it, read-only, under a tmpfs.
 #
-# Usage: build-try-layer.sh <image root> <output.sfs> [channel]
+# Usage: build-try-layer.sh <image root> <output.sfs> [channel] [pacman.conf]
 #
 #   image root   The image's subvolume, mounted (build-root-image.sh's $root).
 #   output.sfs   Where to write the layer.
 #   channel      The pacman channel of the session: stable (default), rc, edge.
+#   pacman.conf  The image's offline repository: with it, the driver layers
+#                are built next to output.sfs as well (see the end).
 #
 # It runs, once, the parts of an install that a live session needs, against an
 # overlay of the image, and keeps the overlay's upper directory:
@@ -29,8 +31,9 @@ set -euo pipefail
 image_root="${1:-}"
 output="${2:-}"
 channel="${3:-stable}"
+pacman_conf="${4:-}"
 if [[ -z $image_root || -z $output ]]; then
-  echo "Usage: build-try-layer.sh <image root> <output.sfs> [channel]" >&2
+  echo "Usage: build-try-layer.sh <image root> <output.sfs> [channel] [pacman.conf]" >&2
   exit 1
 fi
 case $channel in
@@ -50,11 +53,8 @@ merged="$work/merged"
 cleanup() {
   local status=$?
   set +e
-  if mountpoint -q "$merged" 2>/dev/null; then
-    umount -R "$merged" || { echo "WARNING: $merged is still mounted; leaving $work" >&2; return $status; }
-  fi
   if mountpoint -q "$work" 2>/dev/null; then
-    umount "$work" || { echo "WARNING: $work is still mounted" >&2; return $status; }
+    umount -R "$work" || { echo "WARNING: $work is still mounted; leaving it" >&2; return $status; }
   fi
   rm -rf "$work"
   return $status
@@ -221,3 +221,64 @@ umount -R "$merged"
 # deleted.
 mksquashfs "$upper" "$output" -comp zstd -Xcompression-level 3 -noappend -quiet
 echo "Try layer: $(du -h "$output" | cut -f1) at $output"
+
+[[ -n $pacman_conf ]] || exit 0
+
+# Driver layers: what Omarchy's installer adds to a machine with an NVIDIA
+# card or a T2 chip, one layer each, which the Try hook stacks over this one
+# on such a machine. Each is made the way an install makes it: Omarchy's own
+# install/hardware script runs in a chroot over the image and this layer,
+# against a pretend PCI bus, and the packages it asks for are installed from
+# the image's offline repository (DKMS builds against the image's kernel and
+# headers). What it adds is the layer.
+#
+# The 32-bit libraries stay out (omarchy-hw-x86 answers no): a session that
+# forgets everything has no Steam to run. So do kernels and headers: on a Mac
+# the hook uses the live system's own linux-t2 modules.
+driver_layer() { # name, script, lspci line, PCI vendor, device, class
+  local name=$1 script=$2 line=$3 dir="$work/$1"
+  local root="$dir/merged" stubs="$dir/merged/omarchy-try-stubs" packages=()
+
+  mkdir -p "$dir/upper" "$dir/work" "$root"
+  mount -t overlay "try-$name" \
+    -o "lowerdir=$upper:$image_root,upperdir=$dir/upper,workdir=$dir/work,index=off,metacopy=off,redirect_dir=off" \
+    "$root"
+
+  mkdir -p "$stubs/pci/0000:01:00.0"
+  printf '%s\n' "$4" >"$stubs/pci/0000:01:00.0/vendor"
+  printf '%s\n' "$5" >"$stubs/pci/0000:01:00.0/device"
+  printf '%s\n' "$6" >"$stubs/pci/0000:01:00.0/class"
+  printf '#!/bin/sh\necho "%s"\n' "$line" >"$stubs/lspci"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >>/omarchy-try-stubs/packages\n' >"$stubs/omarchy-pkg-add"
+  printf '#!/bin/sh\nexit 1\n' >"$stubs/omarchy-hw-x86"
+  chmod 0755 "$stubs/lspci" "$stubs/omarchy-pkg-add" "$stubs/omarchy-hw-x86"
+
+  # Twice: first for the packages it asks for, then, with them installed,
+  # for what it does with them (its files, its services).
+  local pass
+  for pass in packages config; do
+    arch-chroot "$root" env PATH=/omarchy-try-stubs:/usr/share/omarchy/bin:/usr/bin \
+      OMARCHY_PATH=/usr/share/omarchy OMARCHY_INSTALL=/usr/share/omarchy/install \
+      OMARCHY_PCI_DEVICES_PATH=/omarchy-try-stubs/pci \
+      bash "/usr/share/omarchy/install/hardware/$script" >/dev/null
+    if [[ $pass == packages ]]; then
+      mapfile -t packages < <(grep -Ev '^(linux-t2|lib32-.*|.*-headers)$' "$stubs/packages")
+      ((${#packages[@]})) || { echo "build-try-layer.sh: $script asked for nothing" >&2; exit 1; }
+      pacstrap -C "$pacman_conf" -c -G -M "$root" "${packages[@]}" >/dev/null
+    fi
+  done
+
+  rm -rf "$stubs"
+  umount -R "$root"
+  mksquashfs "$dir/upper" "$(dirname "$output")/omarchy-try-$name.sfs" \
+    -comp zstd -Xcompression-level 3 -noappend -quiet
+  echo "Try $name layer: $(du -h "$(dirname "$output")/omarchy-try-$name.sfs" | cut -f1) (${packages[*]})"
+  rm -rf "$dir"
+}
+
+# A T2 Mac's bridge and an Ada card: the hardware install/hardware/
+# apple/fix-t2.sh and nvidia.sh look for. Not the 580xx driver for Maxwell to
+# Volta (its layer is about 0.55 GB, which the ISO's size limit has no room
+# for): those cards run Try on nouveau, and an install still gets 580xx.
+driver_layer t2 apple/fix-t2.sh "00:00.0 Non-VGA unclassified device [0000]: Apple Inc. T2 Bridge Controller [106b:1801]" 0x106b 0x1801 0x088000
+driver_layer nvidia-open nvidia.sh "01:00.0 VGA compatible controller [0300]: NVIDIA Corporation AD102 [10de:2684]" 0x10de 0x2684 0x030000
