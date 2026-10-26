@@ -91,7 +91,9 @@ check "the boot skipped the ConditionNeedsUpdate= units" try_ssh \
 check "Hyprland runs with a monitor" try_ssh "hyprctl -j monitors | jq -e 'length > 0'"
 check "the Omarchy shell runs" try_ssh "pgrep -x quickshell"
 check "nothing on the machine's disk is mounted" try_ssh '! lsblk -nro MOUNTPOINTS /dev/vda | grep -q .'
-check "the session made its own pacman keyring" try_ssh '[ "$(systemctl show -p Result --value omarchy-try-keyring)" = success ]'
+# Nothing waits for the keyring at boot; wait for it here.
+check "the session made its own pacman keyring" try_ssh \
+  'timeout 120 bash -c "while systemctl is-active -q omarchy-try-keyring; do sleep 1; done" && [ "$(systemctl show -p Result --value omarchy-try-keyring)" = success ]'
 check "pacman installs a package" try_ssh "sudo pacman -S --noconfirm --needed cowsay >/dev/null && cowsay try"
 
 stop_vm

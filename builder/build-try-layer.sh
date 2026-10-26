@@ -141,16 +141,21 @@ in_try env OMARCHY_PATH=/usr/share/omarchy OMARCHY_INSTALL=/usr/share/omarchy/in
 # two installs do. Then the package databases, which Omarchy's Install menu
 # expects to be there (it runs pacman -S without -y): best effort, retried
 # while the network comes up, and nothing is lost without one.
+#
+# Type=exec, not oneshot: multi-user.target would wait for those retries, and
+# with it power-profiles-daemon (After=multi-user.target), which the Omarchy
+# shell waits for at start. As a oneshot it held the desktop back by the
+# whole wait for the network, 8.8 s on an MSI Z690. The keys are in 3.3 s
+# after the unit starts, before the shell has loaded; a pacman run that meets
+# the database sync fails on its lock, as during any update.
 install -Dm644 /dev/stdin "$merged/etc/systemd/system/omarchy-try-keyring.service" <<'EOF'
 [Unit]
 Description=Try Omarchy: a pacman keyring of this session's own
 ConditionPathExists=!/etc/pacman.d/gnupg/trustdb.gpg
 
 [Service]
-Type=oneshot
-ExecStart=/usr/bin/pacman-key --init
-ExecStart=/usr/bin/pacman-key --populate
-ExecStart=-/usr/bin/bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do pacman -Sy --noconfirm && exit 0; sleep 5; done; exit 1'
+Type=exec
+ExecStart=/usr/bin/bash -c 'pacman-key --init && pacman-key --populate || exit 1; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do pacman -Sy --noconfirm && break; sleep 5; done; exit 0'
 
 [Install]
 WantedBy=multi-user.target
