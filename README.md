@@ -308,6 +308,8 @@ Artifacts — screenshots, the fixtured/staged/final `limine.conf`, the reset ty
 
 The evidence folder gets `report.md`, the update's output, and a picture of the desktop before and after.
 
+Pass `--release-iso` to `test/integration` when the ISO is a shipped release rather than a build of this tree. The install is then not held to what only this tree's installer does: a first boot that runs the `ConditionNeedsUpdate=` units, as the 4.0.6 ISO does, is noted instead of failing the install. The "Upgrade test" workflow and the nightly `stable` image pass it.
+
 The "Upgrade test" workflow does both steps from a release's ISO. Start it by hand, from the latest release to edge by default:
 
 ```bash
