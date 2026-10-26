@@ -86,12 +86,24 @@ printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$TRY_USER" >"$merged/etc/sudoers.d/10
 chmod 0440 "$merged/etc/sudoers.d/10-omarchy-try"
 
 # The user's desktop, as the installer's run_chroot_finalizer makes it
-# (orchestrator/phases_impl.py), offline as there.
+# (orchestrator/phases_impl.py), offline as there. A runtime from before
+# Omarchy installed Node lazily unpacks the ISO's bundled Node tarball while
+# it does: the installer binds /opt/packages into the target for it
+# (_prepare_target_setup), and so does this, for the run only.
+node_dir=${OMARCHY_TRY_NODE_DIR:-}
+if [[ -d $node_dir ]]; then
+  mkdir -p "$merged/opt/packages"
+  mount --bind "$node_dir" "$merged/opt/packages"
+fi
 in_try runuser -u "$TRY_USER" -- env \
   HOME="/home/$TRY_USER" USER="$TRY_USER" LOGNAME="$TRY_USER" \
   OMARCHY_PATH=/usr/share/omarchy OMARCHY_INSTALL=/usr/share/omarchy/install \
   OMARCHY_INSTALL_USER="$TRY_USER" MISE_OFFLINE=1 \
   /usr/bin/omarchy-provision-user --force --first-install
+if mountpoint -q "$merged/opt/packages"; then
+  umount "$merged/opt/packages"
+  rmdir "$merged/opt/packages" 2>/dev/null || true
+fi
 
 # Stay awake: no screensaver and no idle lock in a session someone is trying
 # out (the state omarchy-toggle-idle stay-awake writes).
@@ -108,12 +120,13 @@ in_try systemctl mask NetworkManager-wait-online.service >/dev/null 2>&1 || true
 ln -sf ../run/systemd/resolve/stub-resolv.conf "$merged/etc/resolv.conf"
 
 # pacman. The image has no mirrorlist (pacstrap -M) and no keyring (-G); an
-# install gets both at its end (Omarchy's install/post-install/pacman.sh).
-# The channel's pacman.conf and mirrorlist, as Omarchy writes them for a
-# global install: omarchy-apply-pacman renders them from its own templates,
-# with no network.
-in_try env OMARCHY_PATH=/usr/share/omarchy PATH=/usr/share/omarchy/bin:/usr/bin \
-  /usr/share/omarchy/bin/omarchy-apply-pacman "$channel"
+# install gets both at its end. The channel's pacman.conf and mirrorlist come
+# from the step that gives an install them, the image's own
+# install/post-install/pacman.sh, which renders them from Omarchy's templates
+# with no network, whichever runtime the channel carries.
+in_try env OMARCHY_PATH=/usr/share/omarchy OMARCHY_INSTALL=/usr/share/omarchy/install \
+  OMARCHY_MIRROR="$channel" PATH=/usr/share/omarchy/bin:/usr/bin \
+  bash -c 'source "$OMARCHY_INSTALL/post-install/pacman.sh"' >/dev/null
 # The keyring is made at boot, so no two sessions share a master key, as no
 # two installs do. Then the package databases, which Omarchy's Install menu
 # expects to be there (it runs pacman -S without -y): best effort, retried

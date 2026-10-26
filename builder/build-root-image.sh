@@ -33,6 +33,8 @@
 #                               (builder/build-try-layer.sh); none when unset.
 #   OMARCHY_TRY_CHANNEL         The channel the Try session's pacman uses
 #                               (stable, rc or edge; default stable).
+#   OMARCHY_TRY_NODE_DIR        The ISO's bundled Node tarball, for a runtime
+#                               that unpacks it while provisioning the user.
 #
 # Needs a privileged environment: loop devices and a btrfs mount.
 
