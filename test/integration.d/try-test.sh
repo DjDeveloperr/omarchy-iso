@@ -84,6 +84,10 @@ check "the Try session answers SSH" wait_for_ssh 120 failure-try-ssh
 
 check "the root is the Try overlay" try_ssh '[ "$(findmnt -no FSTYPE,SOURCE /)" = "overlay omarchy-try" ]'
 check "no unit failed" try_ssh 'systemctl is-system-running --wait >/dev/null; ! systemctl --failed --no-legend | grep -q .'
+# The layers are stamped as updated (build-try-layer.sh), so the boot redid
+# none of pacman's work: ldconfig alone is seconds from a USB stick.
+check "the boot skipped the ConditionNeedsUpdate= units" try_ssh \
+  '! systemctl show ldconfig.service systemd-hwdb-update.service systemd-journal-catalog-update.service systemd-sysusers.service -p ConditionResult | grep -q yes'
 check "Hyprland runs with a monitor" try_ssh "hyprctl -j monitors | jq -e 'length > 0'"
 check "the Omarchy shell runs" try_ssh "pgrep -x quickshell"
 check "nothing on the machine's disk is mounted" try_ssh '! lsblk -nro MOUNTPOINTS /dev/vda | grep -q .'

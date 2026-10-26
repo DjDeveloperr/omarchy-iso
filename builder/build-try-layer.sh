@@ -77,6 +77,16 @@ in_try() {
   arch-chroot "$merged" "$@"
 }
 
+# The image carries no /etc/.updated (the installer stamps the installed
+# system), so systemd's ConditionNeedsUpdate= units would run at every Try
+# boot: ldconfig alone took 3.7 s from a USB stick on an MSI Z690, all of it
+# before sysinit.target. Pacman and its hooks did their work when the
+# packages went in; stamp each layer as the installer and the live system
+# (customize_airootfs.sh) do.
+mark_updated() {
+  arch-chroot "$1" /usr/lib/systemd/systemd-update-done
+}
+
 # The user. passwd -d: no password, as most live sessions have; the
 # session's sudo needs none either.
 in_try useradd -m -G wheel -s /bin/bash "$TRY_USER"
@@ -214,6 +224,7 @@ EOF
 # Built on the build host's clock and identity; the session makes its own.
 : >"$merged/etc/machine-id"
 
+mark_updated "$merged"
 umount -R "$merged"
 
 # Keep xattrs: overlayfs marks opaque directories with one, and a whiteout is
@@ -269,6 +280,7 @@ driver_layer() { # name, script, lspci line, PCI vendor, device, class
   done
 
   rm -rf "$stubs"
+  mark_updated "$root"
   umount -R "$root"
   mksquashfs "$dir/upper" "$(dirname "$output")/omarchy-try-$name.sfs" \
     -comp zstd -Xcompression-level 19 -b 1M -noappend -quiet
