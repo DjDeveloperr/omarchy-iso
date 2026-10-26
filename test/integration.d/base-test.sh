@@ -586,6 +586,31 @@ ssh_live_root() {
     "root@127.0.0.1" "$@"
 }
 
+# Root SSH on a live ISO booted with the cidata drive, whose user-data
+# authorizes the key (build_cidata). The VM also needs LIVE_CIDATA_SMBIOS:
+# cloud-init's generator runs ds-identify before a USB drive has appeared,
+# finds no datasource and leaves cloud-init off for the boot; the DMI serial
+# ds=nocloud tells it NoCloud is there, and NoCloud then finds the drive.
+# Nothing in the ISO or the install reads the serial.
+LIVE_CIDATA_SMBIOS=(-smbios "type=1,serial=ds=nocloud")
+wait_for_live_root_ssh() {
+  local timeout="$1" started=$SECONDS
+  # By the clock: a refused attempt can itself take ConnectTimeout.
+  until ssh_live_root true 2>/dev/null; do
+    if ! vm_running; then
+      echo "VM exited while waiting for live root SSH" >&2
+      return 1
+    fi
+    if ((SECONDS - started >= timeout)); then
+      capture_console "failure-live-ssh-timeout"
+      echo "Timed out after ${timeout}s waiting for root SSH on the live ISO" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  capture_console "success-live-root-ssh"
+}
+
 bootstrap_live_root_ssh() {
   # The live ISO's console is us, whatever layout the install was given.
   local TYPE_LAYOUT=us
@@ -684,6 +709,22 @@ EOF
 # The configurator's own output files, synthesized for the 40G virtio disk the
 # VM boots from. Sizing mirrors the configurator: 1MiB gap, 2GiB ESP, the rest
 # btrfs minus the GPT backup reserve.
+# The live ISO's cloud-init reads a CIDATA volume as NoCloud: this
+# user-data gives the live system's root the harness key at boot, so a
+# scenario with the drive reaches it over SSH without typing on a console the
+# installer can take back, and before an unattended install that is over in
+# seconds has rebooted it away. The image's cloud.cfg has disable_root: true,
+# which wraps root's key in a "log in as the default user" command, and
+# creates a default user; neither is wanted here. The installer copies only
+# its own files off the drive, and the installed system has no cloud-init, so
+# none of this reaches it.
+cidata_cloud_init() {
+  local dir="$1"
+  printf 'instance-id: omarchy-integration\n' >"$dir/meta-data"
+  printf '#cloud-config\nusers: []\ndisable_root: false\nssh_authorized_keys:\n  - %s\n' \
+    "$(cat "$SSH_KEY.pub")" >"$dir/user-data"
+}
+
 build_cidata() {
   local dir="$BASE_DIR/cidata" hash encryption_config="" credentials_encryption=""
   local disk_bytes=$((DISK_GB * 1024 * 1024 * 1024))
@@ -829,6 +870,8 @@ EOF
 
   echo "$ENCRYPT" >"$dir/user_encrypt_installation.txt"
   cp "$SSH_KEY.pub" "$dir/authorized_keys"
+
+  cidata_cloud_init "$dir"
 
   rm -f "$CIDATA_IMG"
   truncate -s 4M "$CIDATA_IMG"

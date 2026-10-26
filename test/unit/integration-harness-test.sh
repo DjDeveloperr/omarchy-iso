@@ -323,3 +323,43 @@ for setting in FIRMWARE=bios VARIANT=small KB_LAYOUT=uk ENCRYPT=true UKI=true DI
   [[ $(base_dir "$setting") == "$dir" ]] || fail "$setting does not find its own base again"
 done
 echo "ok - each install setting saves and reuses its own base"
+
+# ------------------------------------------- live root SSH from the cidata drive
+#
+# The live ISO's cloud-init reads the cidata drive as NoCloud. Its user-data
+# authorizes the harness key for root, which the image's cloud.cfg would wrap
+# in a "log in as the default user" command (disable_root: true), and creates
+# no default user.
+
+take cidata_cloud_init
+SSH_KEY="$work/id_ed25519"
+mkdir -p "$work/cidata"
+run cidata_cloud_init "$work/cidata"
+((status == 0)) || fail "cidata_cloud_init failed: $(cat "$work/out")"
+grep -qx 'instance-id: .*' "$work/cidata/meta-data" || fail "no NoCloud meta-data on the cidata drive"
+user_data=$(cat "$work/cidata/user-data")
+[[ $(head -n1 <<<"$user_data") == "#cloud-config" ]] || fail "user-data is not cloud-config: $user_data"
+grep -qx 'disable_root: false' <<<"$user_data" || fail "root's key would be disabled: $user_data"
+grep -qx 'users: \[\]' <<<"$user_data" || fail "cloud-init would create its default user: $user_data"
+grep -qxF "  - $(cat "$SSH_KEY.pub")" <<<"$user_data" || fail "the harness key is not authorized: $user_data"
+grep -q 'cidata_cloud_init "\$dir"' "$harness" || fail "build_cidata does not put the cloud-init files on the drive"
+echo "ok - the cidata drive authorizes the harness key for the live ISO's root"
+
+# Both live-SSH waits keep to their budget by the clock, when each refused
+# attempt itself takes ConnectTimeout (5 s).
+take wait_for_live_root_ssh
+ssh_live_root() { sleep 5; false; }
+echo 0 >"$work/slept"
+run wait_for_live_root_ssh 120
+slept=$(<"$work/slept")
+((status == 1)) || fail "live root SSH that never came up did not time out (status $status)"
+((slept <= 120 + 10)) || fail "a 120 s live-SSH wait took ${slept}s"
+take bootstrap_live_root_ssh
+wait_for_screen() { true; }
+echo 0 >"$work/slept"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+slept=$(<"$work/slept")
+((status == 1)) || fail "the live root bootstrap did not fail (status $status)"
+((slept <= 3 * (60 + 10) + 3 * 40)) || fail "three 60 s bootstrap attempts took ${slept}s"
+echo "ok - the live-SSH waits keep to their budget when each attempt takes 5 s"

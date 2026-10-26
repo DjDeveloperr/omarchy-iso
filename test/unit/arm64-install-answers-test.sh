@@ -25,14 +25,19 @@ printf '#!/bin/sh\nexit 0\n' >"$work/bin/mkfs.vfat"
 printf '#!/bin/sh\nexit 0\n' >"$work/bin/mcopy"
 chmod +x "$work/bin/mkfs.vfat" "$work/bin/mcopy"
 
-(
-  set -u
-  PATH="$work/bin:$PATH"
-  state=$work iso=/nonexistent.iso
-  eval "$answers"
-  RUNTIME_PACKAGE=omarchy SETTINGS_PACKAGE=omarchy-settings
-  build_cidata >"$work/build.log" 2>&1
-) || fail "build_cidata does not run with arm64-install's settings: $(tail -n2 "$work/build.log" 2>/dev/null)"
+# In a bash of its own, as strict as arm64-install: set -e does not hold in a
+# subshell whose status is tested, and a helper build_cidata calls that was
+# not borrowed along must stop it, as it stops arm64-install.
+cat >"$work/answers.sh" <<'EOF'
+set -euo pipefail
+PATH="$WORK/bin:$PATH"
+state=$WORK iso=/nonexistent.iso
+eval "$ANSWERS"
+RUNTIME_PACKAGE=omarchy SETTINGS_PACKAGE=omarchy-settings
+build_cidata
+EOF
+WORK=$work ANSWERS=$answers ROOT=$ROOT bash "$work/answers.sh" >"$work/build.log" 2>&1 ||
+  fail "build_cidata does not run with arm64-install's settings: $(tail -n2 "$work/build.log" 2>/dev/null)"
 
 config=$work/cidata/user_configuration.json
 jq -e . "$config" >/dev/null || fail "build_cidata wrote no valid user_configuration.json"

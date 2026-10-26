@@ -61,7 +61,8 @@ netboot_into_installer() {
   NIC_EXTRA=",bootindex=2"
   start_vm "$RUN_DIR/disk.qcow2" "$RUN_DIR/serial.log" \
     -drive "file=$CIDATA_IMG,format=raw,if=none,id=cidata" \
-    -device usb-storage,drive=cidata
+    -device usb-storage,drive=cidata \
+    "${LIVE_CIDATA_SMBIOS[@]}"
 
   # Unlike the ISO's boot menu, the PXE menu has no auto-boot timeout, so
   # commit the highlighted default — the NBD entry leads the list.
@@ -109,7 +110,7 @@ netboot_into_installer() {
   done
   log "NBD connection established"
 
-  bootstrap_live_root_ssh
+  wait_for_live_root_ssh 120
 }
 
 assert_nbd_medium() {
