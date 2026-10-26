@@ -259,7 +259,11 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   install -Dm0644 /builder/qualcomm/early-firmware.py "$build_cache_dir/airootfs/usr/lib/initcpio/qcom-early-firmware.py"
   rm -rf "$build_cache_dir/syslinux" "$build_cache_dir/efiboot"
 else
-  boot_splash_kernel_options="quiet splash "
+  # The live initramfs carries no GPU driver, so Plymouth draws on the
+  # firmware's framebuffer through simpledrm, which it otherwise leaves alone
+  # until its 8 s DeviceTimeout: the logo showed 7.8 s after the menu pick on
+  # an MSI Z690 from USB.
+  boot_splash_kernel_options="quiet splash plymouth.use-simpledrm "
   kernel_options="xe.enable_panel_replay=0 initramfs_async=0 intel_idle.states_off=0x3fc"
 fi
 for grub_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg"; do
