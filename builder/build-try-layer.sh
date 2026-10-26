@@ -5,10 +5,11 @@
 # hooks/omarchy_try). The image itself stays exactly the bytes an install
 # writes; this layer goes on top of it, read-only, under a tmpfs.
 #
-# Usage: build-try-layer.sh <image root> <output.sfs>
+# Usage: build-try-layer.sh <image root> <output.sfs> [channel]
 #
 #   image root   The image's subvolume, mounted (build-root-image.sh's $root).
 #   output.sfs   Where to write the layer.
+#   channel      The pacman channel of the session: stable (default), rc, edge.
 #
 # It runs, once, the parts of an install that a live session needs, against an
 # overlay of the image, and keeps the overlay's upper directory:
@@ -16,6 +17,8 @@
 #   - user omarchy with no password, sudo without one, SDDM logging it in;
 #   - omarchy-provision-user for it, as the installer runs it;
 #   - the services an installed system enables for its desktop and network;
+#   - pacman as an install leaves it: the channel's repositories and mirrors,
+#     and a keyring of the session's own, made at boot;
 #   - nothing that touches a disk: no Snapper or Limine timers, no mdraid or
 #     LVM autoassembly, no automount of other disks.
 #
@@ -25,10 +28,18 @@ set -euo pipefail
 
 image_root="${1:-}"
 output="${2:-}"
+channel="${3:-stable}"
 if [[ -z $image_root || -z $output ]]; then
-  echo "Usage: build-try-layer.sh <image root> <output.sfs>" >&2
+  echo "Usage: build-try-layer.sh <image root> <output.sfs> [channel]" >&2
   exit 1
 fi
+case $channel in
+stable | rc | edge) ;;
+*)
+  echo "build-try-layer.sh: unknown channel '$channel'" >&2
+  exit 1
+  ;;
+esac
 
 TRY_USER=omarchy
 
@@ -95,6 +106,33 @@ for unit in systemd-resolved.service NetworkManager.service power-profiles-daemo
 done
 in_try systemctl mask NetworkManager-wait-online.service >/dev/null 2>&1 || true
 ln -sf ../run/systemd/resolve/stub-resolv.conf "$merged/etc/resolv.conf"
+
+# pacman. The image has no mirrorlist (pacstrap -M) and no keyring (-G); an
+# install gets both at its end (Omarchy's install/post-install/pacman.sh).
+# The channel's pacman.conf and mirrorlist, as Omarchy writes them for a
+# global install: omarchy-apply-pacman renders them from its own templates,
+# with no network.
+in_try env OMARCHY_PATH=/usr/share/omarchy PATH=/usr/share/omarchy/bin:/usr/bin \
+  /usr/share/omarchy/bin/omarchy-apply-pacman "$channel"
+# The keyring is made at boot, so no two sessions share a master key, as no
+# two installs do. Then the package databases, which Omarchy's Install menu
+# expects to be there (it runs pacman -S without -y): best effort, retried
+# while the network comes up, and nothing is lost without one.
+install -Dm644 /dev/stdin "$merged/etc/systemd/system/omarchy-try-keyring.service" <<'EOF'
+[Unit]
+Description=Try Omarchy: a pacman keyring of this session's own
+ConditionPathExists=!/etc/pacman.d/gnupg/trustdb.gpg
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pacman-key --init
+ExecStart=/usr/bin/pacman-key --populate
+ExecStart=-/usr/bin/bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do pacman -Sy --noconfirm && exit 0; sleep 5; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+in_try systemctl enable omarchy-try-keyring.service >/dev/null 2>&1
 
 # SDDM straight into the session, as configure_login does for an encrypted
 # install.

@@ -31,6 +31,8 @@
 #                               written extents cost anything.
 #   OMARCHY_TRY_LAYER           Where to write the Try layer for this image
 #                               (builder/build-try-layer.sh); none when unset.
+#   OMARCHY_TRY_CHANNEL         The channel the Try session's pacman uses
+#                               (stable, rc or edge; default stable).
 #
 # Needs a privileged environment: loop devices and a btrfs mount.
 
@@ -417,7 +419,7 @@ fi
 # The Try layer is built against the finished image, before the shrink: it
 # only reads the image, through an overlay whose upper directory it keeps.
 if [[ -n ${OMARCHY_TRY_LAYER:-} ]]; then
-  bash /builder/build-try-layer.sh "$root" "$OMARCHY_TRY_LAYER"
+  bash /builder/build-try-layer.sh "$root" "$OMARCHY_TRY_LAYER" "${OMARCHY_TRY_CHANNEL:-stable}"
 fi
 
 # The image is the loop backing file itself: the same on-disk bytes, written
