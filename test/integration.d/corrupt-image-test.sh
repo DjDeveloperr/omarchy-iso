@@ -109,9 +109,10 @@ install_from_corrupt_medium() {
     -drive "file=$CORRUPT_ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
     -device ide-cd,drive=cdrom0,bootindex=2 \
     -drive "file=$CIDATA_IMG,format=raw,if=none,id=cidata" \
-    -device usb-storage,drive=cidata
+    -device usb-storage,drive=cidata \
+    "${LIVE_CIDATA_SMBIOS[@]}"
 
-  bootstrap_live_root_ssh
+  wait_for_live_root_ssh 120
 
   log "Waiting for the installer to stop"
   local waited=0

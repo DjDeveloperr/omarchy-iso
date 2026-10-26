@@ -201,6 +201,20 @@ capture_console() {
   rm -f "$shot"
 }
 
+# What the vCPUs are doing, for a boot that hangs before the kernel prints:
+# the installed system boots quiet, so the serial log of a hang stops at the
+# firmware starting Limine whether the loader or the kernel stopped. A RIP
+# in the kernel's half of the address space (0xffff...) or below it, and
+# whether the CPUs halted, tell the two apart.
+capture_vm_state() {
+  local name="$1" what
+  for what in "info status" "info cpus" "info registers -a"; do
+    printf '=== %s\n' "$what"
+    qmp "\"human-monitor-command\", \"arguments\": {\"command-line\": \"$what\"}" |
+      sed -n 's/.*"return": *"\(.*\)".*/\1/p' | sed 's/\\r//g; s/\\n/\n/g'
+  done >"$RUN_DIR/$name-vm-state.txt" 2>&1
+}
+
 stop_vm() {
   vm_running || return 0
 
@@ -472,6 +486,7 @@ wait_for_ssh() {
 
     if ((SECONDS - started >= timeout)); then
       capture_console "$failure_name"
+      capture_vm_state "$failure_name"
       echo "Timed out after ${timeout}s waiting for SSH" >&2
       return 1
     fi
@@ -559,7 +574,7 @@ EOF
 # Root SSH into the live ISO itself (not the installed system). The live root
 # runs sshd and autologs in on tty1 with an empty password, but sshd refuses
 # empty passwords, so authorize our key the same console-login way as above,
-# on tty3 (tty1 is the installer's).
+# on tty3 and up (tty1 is the installer's).
 ssh_live_root() {
   ssh -i "$SSH_KEY" -p "$SSH_PORT" \
     -o BatchMode=yes \
@@ -569,6 +584,31 @@ ssh_live_root() {
     -o ConnectTimeout=5 \
     -o LogLevel=ERROR \
     "root@127.0.0.1" "$@"
+}
+
+# Root SSH on a live ISO booted with the cidata drive, whose user-data
+# authorizes the key (build_cidata). The VM also needs LIVE_CIDATA_SMBIOS:
+# cloud-init's generator runs ds-identify before a USB drive has appeared,
+# finds no datasource and leaves cloud-init off for the boot; the DMI serial
+# ds=nocloud tells it NoCloud is there, and NoCloud then finds the drive.
+# Nothing in the ISO or the install reads the serial.
+LIVE_CIDATA_SMBIOS=(-smbios "type=1,serial=ds=nocloud")
+wait_for_live_root_ssh() {
+  local timeout="$1" started=$SECONDS
+  # By the clock: a refused attempt can itself take ConnectTimeout.
+  until ssh_live_root true 2>/dev/null; do
+    if ! vm_running; then
+      echo "VM exited while waiting for live root SSH" >&2
+      return 1
+    fi
+    if ((SECONDS - started >= timeout)); then
+      capture_console "failure-live-ssh-timeout"
+      echo "Timed out after ${timeout}s waiting for root SSH on the live ISO" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  capture_console "success-live-root-ssh"
 }
 
 bootstrap_live_root_ssh() {
@@ -597,44 +637,66 @@ EOF
     for i in 1 2 3; do press ret; sleep 2; done
   fi
 
-  local waited=0
-  while true; do
-    press ctrl-alt-f3
-    sleep 4
-    ocr_screen | grep -qi "login:" && break
-    ((waited += 8))
+  # The live boot can switch the VT back to tty1 after the login prompt has
+  # shown on the spare one: on a run of used-disk, "root", Return and this
+  # curl line all went into the installer's wizard on tty1, and the scenario
+  # timed out waiting for a command that never ran. So a root prompt must be
+  # on screen before the command is typed, the VT is selected again right
+  # before each line, and an attempt that still loses its console moves to a
+  # fresh getty (tty3, tty4, tty5), as bootstrap_ssh does.
+  local attempt vt waited deadline up=false
+  for attempt in 1 2 3; do
+    vt=$((attempt + 2))
+    waited=0
+    while true; do
+      press "ctrl-alt-f$vt"
+      sleep 4
+      ocr_screen | grep -qi "login:" && break
+      ((waited += 8))
 
-    if ((waited >= 300)); then
-      capture_console "failure-live-console-timeout"
-      echo "Timed out waiting for a live console login prompt" >&2
-      return 1
-    fi
-    sleep 4
-  done
+      if ((waited >= 300)); then
+        capture_console "failure-live-console-timeout"
+        echo "Timed out waiting for a live console login prompt" >&2
+        return 1
+      fi
+      sleep 4
+    done
 
-  type_text root
-  press ret
-  sleep 2
-  # The password is empty; login still prompts for it.
-  ocr_screen | grep -qi "password" && { press ret; sleep 2; }
-
-  type_text "curl -fsS http://10.0.2.2:$HTTP_PORT/bootstrap-live -o /tmp/bs && bash /tmp/bs"
-  press ret
-
-  waited=0
-  until ssh_live_root true 2>/dev/null; do
-    if ! vm_running; then
-      echo "VM exited while waiting for live root SSH" >&2
-      return 1
-    fi
-    if ((waited >= 180)); then
-      capture_console "failure-live-ssh-timeout"
-      echo "Timed out waiting for root SSH on the live ISO" >&2
-      return 1
-    fi
+    press "ctrl-alt-f$vt"
+    type_text root
+    press ret
     sleep 2
-    ((waited += 2))
+    # The password is empty; login may still prompt for it.
+    ocr_screen | grep -qi "password" && { press ret; sleep 2; }
+    # The shell prompt, root@archiso ~ #. OCR reads its red "root@" as
+    # noise, so match the rest: the login banner, "archiso login:", has no #.
+    if ! wait_for_screen "archiso [^l]*#" 30; then
+      log "No root prompt on tty$vt (attempt $attempt); retrying on the next VT"
+      continue
+    fi
+
+    press "ctrl-alt-f$vt"
+    type_text "curl -fsS http://10.0.2.2:$HTTP_PORT/bootstrap-live -o /tmp/bs && bash /tmp/bs"
+    press ret
+
+    # By the clock: a refused attempt can itself take ConnectTimeout.
+    deadline=$((SECONDS + 60))
+    until ssh_live_root true 2>/dev/null && up=true; do
+      if ! vm_running; then
+        echo "VM exited while waiting for live root SSH" >&2
+        return 1
+      fi
+      ((SECONDS >= deadline)) && break
+      sleep 2
+    done
+    [[ $up == true ]] && break
+    capture_console "failure-live-ssh-timeout-$attempt"
+    log "Root SSH did not come up after the console login on tty$vt (attempt $attempt); retrying on the next VT"
   done
+  if [[ $up != true ]]; then
+    echo "Live root SSH bootstrap failed after 3 console logins" >&2
+    return 1
+  fi
   capture_console "success-live-root-ssh"
 
   kill "$HTTP_PID" 2>/dev/null || true
@@ -647,6 +709,22 @@ EOF
 # The configurator's own output files, synthesized for the 40G virtio disk the
 # VM boots from. Sizing mirrors the configurator: 1MiB gap, 2GiB ESP, the rest
 # btrfs minus the GPT backup reserve.
+# The live ISO's cloud-init reads a CIDATA volume as NoCloud: this
+# user-data gives the live system's root the harness key at boot, so a
+# scenario with the drive reaches it over SSH without typing on a console the
+# installer can take back, and before an unattended install that is over in
+# seconds has rebooted it away. The image's cloud.cfg has disable_root: true,
+# which wraps root's key in a "log in as the default user" command, and
+# creates a default user; neither is wanted here. The installer copies only
+# its own files off the drive, and the installed system has no cloud-init, so
+# none of this reaches it.
+cidata_cloud_init() {
+  local dir="$1"
+  printf 'instance-id: omarchy-integration\n' >"$dir/meta-data"
+  printf '#cloud-config\nusers: []\ndisable_root: false\nssh_authorized_keys:\n  - %s\n' \
+    "$(cat "$SSH_KEY.pub")" >"$dir/user-data"
+}
+
 build_cidata() {
   local dir="$BASE_DIR/cidata" hash encryption_config="" credentials_encryption=""
   local disk_bytes=$((DISK_GB * 1024 * 1024 * 1024))
@@ -792,6 +870,8 @@ EOF
 
   echo "$ENCRYPT" >"$dir/user_encrypt_installation.txt"
   cp "$SSH_KEY.pub" "$dir/authorized_keys"
+
+  cidata_cloud_init "$dir"
 
   rm -f "$CIDATA_IMG"
   truncate -s 4M "$CIDATA_IMG"
