@@ -74,19 +74,38 @@ netboot_into_installer() {
   # initramfs is up is it dialing the NBD export — gate on that from the host
   # side before driving the console.
   log "Waiting for the initramfs to dial the NBD export"
-  local waited=0
+  # By the clock, menu waits included: 900 s from here, however many loads fail.
+  local deadline=$((SECONDS + 900)) failed_loads=0 loads
   until nbd_dialed; do
     if ! vm_running; then
       echo "VM exited before connecting to the NBD export" >&2
       return 1
     fi
-    if ((waited >= 900)); then
+    # PXELINUX gives up on a boot file it cannot load and comes back to the
+    # menu, which waits for ever: after a transfer that fails part way (on
+    # one CI run, "netconn_send error -2" on the initramfs) it says "Boot
+    # failed: press a key to retry, or wait for reset" and resets; after a
+    # TFTP error ("...failed: No such file or directory") it redraws the
+    # menu at once. Choose the entry again, as a person at the menu would;
+    # three failed loads fail the scenario.
+    loads=$(grep -a -c -E 'Boot failed|\.\.\.failed' "$RUN_DIR/serial.log" || true)
+    if ((loads > failed_loads)); then
+      failed_loads=$loads
+      if ((failed_loads > 3)); then
+        capture_console "failure-pxe-boot-files"
+        echo "PXELINUX failed to load the boot files $failed_loads times" >&2
+        return 1
+      fi
+      log "PXELINUX failed to load the boot files ($failed_loads); choosing the NBD entry again"
+      wait_for_screen "NBD" $((deadline - SECONDS > 1 ? deadline - SECONDS : 1))
+      press ret
+    fi
+    if ((SECONDS >= deadline)); then
       capture_console "failure-nbd-connect-timeout"
       echo "Timed out waiting for the guest to dial the NBD export" >&2
       return 1
     fi
     sleep 5
-    ((waited += 5))
   done
   log "NBD connection established"
 

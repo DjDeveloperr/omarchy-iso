@@ -215,6 +215,39 @@ grep -q '^ctrl-alt-f5 curl' "$work/typed" || fail "the last attempt did not use 
 ((slept <= 300)) || fail "three failed live root logins took ${slept}s"
 echo "ok - live root SSH that never comes up fails after three VTs"
 
+# pxe's NBD wait keeps to its 900 s when a load has failed and the return to
+# the menu takes the menu wait's whole time. (The first wait for the menu,
+# before the NBD wait starts, has its own 300 s.)
+take_from "$ROOT/test/integration.d/pxe-test.sh" netboot_into_installer
+SSH_KEY="$work/id_ed25519" RUN_DIR="$work/pxe-run" TFTP_ROOT="$work/tftp" CIDATA_IMG="$work/cidata.img"
+mkdir -p "$RUN_DIR"
+detect_packages() { :; }
+build_cidata() { :; }
+start_vm() { :; }
+qemu-img() { :; }
+nbd_dialed() { false; }
+wait_for_live_root_ssh() { :; }
+bootstrap_live_root_ssh() { :; }
+LIVE_CIDATA_SMBIOS=()
+# The wait at the menu takes all the time it is given, and the load fails
+# 600 s into the NBD wait: a retry that started its own 900 s would take
+# 300 + 600 + 900 s.
+wait_for_screen() { sleep "$2"; }
+: >"$RUN_DIR/serial.log"
+nbd_dialed() {
+  (($(<"$work/slept") >= 300 + 600)) && ! grep -q 'Boot failed' "$RUN_DIR/serial.log" &&
+    echo "Boot failed: press a key to retry" >>"$RUN_DIR/serial.log"
+  return 1
+}
+echo 0 >"$work/slept"
+run netboot_into_installer
+slept=$(<"$work/slept")
+((status == 1)) || fail "a PXE boot that never dials NBD did not fail (status $status)"
+grep -q "Timed out waiting for the guest to dial the NBD export" "$work/out" ||
+  fail "the NBD wait was never reached: $(tail -n3 "$work/out")"
+((slept <= 300 + 900 + 10)) || fail "pxe's 900 s NBD wait took ${slept}s after a failed load"
+echo "ok - pxe's NBD wait keeps to 900 s after a failed load"
+
 # The factory first boot's keyboard step takes English (US) and loads it,
 # so what the form asks for next is typed as us: on uk keys, a password
 # with an @ arrives with a " in its place.
