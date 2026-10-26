@@ -41,6 +41,7 @@ run() {
 log() { :; }
 vm_running() { true; }
 capture_console() { :; }
+capture_vm_state() { :; }
 type_text() { :; }
 press() { echo "$1" >>"$work/pressed"; }
 # Time passes only in sleep, and is kept in a file because the functions

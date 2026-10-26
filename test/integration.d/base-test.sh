@@ -201,6 +201,20 @@ capture_console() {
   rm -f "$shot"
 }
 
+# What the vCPUs are doing, for a boot that hangs before the kernel prints:
+# the installed system boots quiet, so the serial log of a hang stops at the
+# firmware starting Limine whether the loader or the kernel stopped. A RIP
+# in the kernel's half of the address space (0xffff...) or below it, and
+# whether the CPUs halted, tell the two apart.
+capture_vm_state() {
+  local name="$1" what
+  for what in "info status" "info cpus" "info registers -a"; do
+    printf '=== %s\n' "$what"
+    qmp "\"human-monitor-command\", \"arguments\": {\"command-line\": \"$what\"}" |
+      sed -n 's/.*"return": *"\(.*\)".*/\1/p' | sed 's/\\r//g; s/\\n/\n/g'
+  done >"$RUN_DIR/$name-vm-state.txt" 2>&1
+}
+
 stop_vm() {
   vm_running || return 0
 
@@ -472,6 +486,7 @@ wait_for_ssh() {
 
     if ((SECONDS - started >= timeout)); then
       capture_console "$failure_name"
+      capture_vm_state "$failure_name"
       echo "Timed out after ${timeout}s waiting for SSH" >&2
       return 1
     fi
