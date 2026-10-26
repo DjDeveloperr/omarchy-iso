@@ -859,31 +859,64 @@ def _stage_image_files_under(top: Path, placed: list[tuple[Path, str]],
     The kernel package puts its device trees in /boot/dtbs, where the ESP
     mounts, and Snapdragon setup reads them from there. A subvolume placed
     below the mountpoint stays where its mount expects it, and a stage left
-    by an earlier attempt is dropped first."""
+    by an earlier attempt is dropped first.
+
+    FAT has no symlinks, so a link is staged as what it names. Everything is
+    copied before anything is removed, so every link is read while what it
+    names is still in place; a link that names nothing is dropped."""
     shutil.rmtree(stage, ignore_errors=True)
+    trees = []
     for rel in mountpoints:
         under, rest = _image_dir_for(placed, rel)
         content = top / under / rest
-        if not content.is_dir() or content.is_symlink():
+        if content.is_dir() and not content.is_symlink():
+            keep = {mountpoint.relative_to(rel) for mountpoint, _ in placed
+                    if mountpoint.is_relative_to(rel) and mountpoint != rel}
+            trees.append((rel, content, keep))
+    for rel, content, keep in trees:
+        _copy_tree_except(content, stage / rel, keep, frozenset())
+    for rel, content, keep in trees:
+        _remove_tree_except(content, keep)
+
+
+def _inside(keep: set[Path], name: Path) -> set[Path]:
+    return {k.relative_to(name) for k in keep if k.is_relative_to(name)}
+
+
+def _copy_tree_except(content: Path, dest: Path, keep: set[Path], seen: frozenset[Path]) -> None:
+    """Copy what content holds into dest with links followed, except the
+    paths in keep (relative to content). A directory a link leads back into
+    is not copied again."""
+    real = content.resolve()
+    if real in seen:
+        return
+    seen = seen | {real}
+    dest.mkdir(parents=True, exist_ok=True)
+    for entry in content.iterdir():
+        name = Path(entry.name)
+        if name in keep:
             continue
-        keep = [mountpoint.relative_to(rel) for mountpoint, _ in placed
-                if mountpoint.is_relative_to(rel) and mountpoint != rel]
-        _move_tree_except(content, stage / rel, keep)
+        if entry.is_dir():
+            _copy_tree_except(entry, dest / name, _inside(keep, name), seen)
+        elif entry.is_file():
+            shutil.copy2(entry, dest / name)
 
 
-def _move_tree_except(content: Path, dest: Path, keep: list[Path]) -> None:
-    """Move everything under content into dest except the paths in keep
-    (relative to content), walking into the directories that hold one."""
+def _remove_tree_except(content: Path, keep: set[Path]) -> None:
+    """Remove what content holds except the paths in keep (relative to
+    content) and the directories leading to them."""
     for entry in list(content.iterdir()):
         name = Path(entry.name)
         if name in keep:
             continue
-        inner = [k.relative_to(name) for k in keep if k.is_relative_to(name)]
-        if inner and entry.is_dir() and not entry.is_symlink():
-            _move_tree_except(entry, dest / name, inner)
-            continue
-        dest.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(entry), str(dest / name))
+        inner = _inside(keep, name)
+        if entry.is_dir() and not entry.is_symlink():
+            if inner:
+                _remove_tree_except(entry, inner)
+            else:
+                shutil.rmtree(entry)
+        else:
+            entry.unlink()
 
 
 def _restore_image_files_onto(stage: Path, target: Path, mountpoints: list[Path]) -> None:
@@ -892,7 +925,7 @@ def _restore_image_files_onto(stage: Path, target: Path, mountpoints: list[Path]
     for rel in mountpoints:
         staged = stage / rel
         if staged.is_dir() and any(staged.iterdir()):
-            subprocess.run(["cp", "-rL", f"{staged}/.", str(target / rel)], check=True)
+            subprocess.run(["cp", "-r", f"{staged}/.", str(target / rel)], check=True)
     shutil.rmtree(stage, ignore_errors=True)
 
 

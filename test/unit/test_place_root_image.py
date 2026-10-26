@@ -8,6 +8,7 @@ and the layout left behind (@ from the image, @home/@log/@pkg, pacman.log in
 @log, the target's mounts restored). finalize_boot_and_user runs its two
 branches at once, waits for both, and raises the first failure."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,7 @@ class InstallRootImageDdTest(unittest.TestCase):
         ]
         self.calls = []
         self.image_files = []
+        self.image_links = []
 
     def fake_run(self, argv, **kwargs):
         argv = [str(a) for a in argv]
@@ -59,12 +61,16 @@ class InstallRootImageDdTest(unittest.TestCase):
                 f = Path(argv[4]) / phases_impl.ROOT_IMAGE_SUBVOLUME / name
                 f.parent.mkdir(parents=True, exist_ok=True)
                 f.write_text(name)
+            for name, points_to in self.image_links:
+                link = Path(argv[4]) / phases_impl.ROOT_IMAGE_SUBVOLUME / name
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(points_to)
         elif argv[:3] == ["btrfs", "subvolume", "create"]:
             Path(argv[3]).mkdir()
         elif argv[:3] == ["cp", "-a", "--reflink=always"]:
             shutil.copytree(argv[3].removesuffix("/."), argv[4], symlinks=True, dirs_exist_ok=True)
-        elif argv[:2] == ["cp", "-rL"]:
-            shutil.copytree(argv[2].removesuffix("/."), argv[3], dirs_exist_ok=True)
+        elif argv[:2] == ["cp", "-r"]:
+            shutil.copytree(argv[2].removesuffix("/."), argv[3], symlinks=True, dirs_exist_ok=True)
         elif self.fail_on and argv[: len(self.fail_on)] == self.fail_on:
             raise subprocess.CalledProcessError(1, argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -175,7 +181,7 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertEqual((self.target / dtb).read_text(), dtb)
         self.assertEqual(list((top / "@" / "boot").iterdir()), [])
         self.assertLess(self.index(["mount", "-o", "rw,relatime,fmask=0077", "/dev/vda1"]),
-                        self.index(["cp", "-rL"]))
+                        self.index(["cp", "-r"]))
         self.assertFalse((self.ctx.state_dir / "image-under-esp").exists())
 
     def test_a_stage_left_by_an_earlier_attempt_is_dropped(self):
@@ -239,6 +245,57 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertEqual((self.target / "boot/limine.conf").read_text(), "boot/limine.conf")
         self.assertEqual(sorted(p.name for p in (top / "@/boot/EFI").iterdir()), ["Linux"])
 
+    def test_links_land_on_the_esp_as_the_files_they_name(self):
+        # FAT has no symlinks: a link is copied as the file it names, read
+        # from the image while that is still in place, here inside a
+        # subvolume that stays behind.
+        self.image_files = ["boot/EFI/Linux/omarchy.efi"]
+        self.image_links = [("boot/EFI/current.efi", "Linux/omarchy.efi"), ("boot/gone.efi", "nowhere.efi")]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+            {"target": str(self.target / "boot/EFI/Linux"), "source": f"{DEVICE}[/@/boot/EFI/Linux]",
+             "fstype": "btrfs", "options": "rw,noatime,subvolid=265,subvol=/@/boot/EFI/Linux"},
+        ]
+        self.install()
+        current = self.target / "boot/EFI/current.efi"
+        self.assertFalse(current.is_symlink())
+        self.assertEqual(current.read_text(), "boot/EFI/Linux/omarchy.efi")
+        self.assertFalse(os.path.lexists(self.target / "boot/gone.efi"))
+
+    def test_links_are_read_before_anything_is_removed(self):
+        # Relative links resolve from where they sit, whatever the order the
+        # directory lists them in; a loop is copied once; a link that names
+        # nothing is dropped.
+        self.image_files = ["boot/kernel.efi", "boot/EFI/omarchy.efi", "boot/dtbs/qcom/a.dtb"]
+        self.image_links = [("boot/current.efi", "kernel.efi"), ("boot/EFI/current.efi", "omarchy.efi"),
+                            ("boot/dtbs/latest", "qcom"), ("boot/dtbs/qcom/loop", ".."),
+                            ("boot/EFI/gone.efi", "missing.efi")]
+        self.mounts.append(
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"})
+        self.install()
+        boot = self.target / "boot"
+        self.assertEqual((boot / "current.efi").read_text(), "boot/kernel.efi")
+        self.assertEqual((boot / "EFI/current.efi").read_text(), "boot/EFI/omarchy.efi")
+        self.assertEqual((boot / "dtbs/latest/a.dtb").read_text(), "boot/dtbs/qcom/a.dtb")
+        self.assertFalse(any(p.is_symlink() for p in boot.rglob("*")))
+        self.assertFalse(os.path.lexists(boot / "EFI/gone.efi"))
+        self.assertEqual(list((self.ctx.state_dir / "image-top" / "@" / "boot").iterdir()), [])
+
+    def test_a_link_across_two_esp_mounts_is_read_before_either_is_emptied(self):
+        self.image_files = ["boot/kernel.efi"]
+        self.image_links = [("efi/current.efi", "../boot/kernel.efi")]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+            {"target": str(self.target / "efi"), "source": "/dev/vda3", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+        ]
+        self.install()
+        self.assertEqual((self.target / "boot/kernel.efi").read_text(), "boot/kernel.efi")
+        self.assertEqual((self.target / "efi/current.efi").read_text(), "boot/kernel.efi")
+
     def test_other_filesystems_are_left_to_their_own_mounts(self):
         self.image_files = ["srv/data/readme"]
         self.mounts.append(
@@ -247,14 +304,14 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.install()
         top = self.ctx.state_dir / "image-top"
         self.assertEqual((top / "@" / "srv/data/readme").read_text(), "srv/data/readme")
-        self.assertFalse(any(c[:2] == ["cp", "-rL"] for c in self.calls), self.calls)
+        self.assertFalse(any(c[:2] == ["cp", "-r"] for c in self.calls), self.calls)
 
     def test_nothing_is_copied_when_the_image_has_nothing_under_the_esp(self):
         self.mounts.append(
             {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
              "options": "rw,relatime,fmask=0077"})
         self.install()
-        self.assertFalse(any(c[:2] == ["cp", "-rL"] for c in self.calls), self.calls)
+        self.assertFalse(any(c[:2] == ["cp", "-r"] for c in self.calls), self.calls)
 
     def test_a_subvolume_named_inside_at_becomes_one(self):
         # A name nested in @ (@/srv/data) is a plain directory in the image;
