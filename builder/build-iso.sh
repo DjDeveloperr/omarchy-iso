@@ -1078,7 +1078,10 @@ cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.
 
 # Build the ISO. profiledef.sh reads OMARCHY_ARCH for the archiso arch/bootmodes.
 echo "[timing] mkarchiso start $(date +%s)"
-"$mkarchiso_command" -v -w "$build_cache_dir/work/" -o /out/ "$build_cache_dir/"
+# The live system goes in as a layer over the root image, which then carries
+# what both hold (builder/mksquashfs-shim, builder/dedup-airootfs.sh).
+OMARCHY_ROOT_IMAGE="$root_image" PATH="/builder/mksquashfs-shim:$PATH" \
+  "$mkarchiso_command" -v -w "$build_cache_dir/work/" -o /out/ "$build_cache_dir/"
 echo "[timing] mkarchiso end $(date +%s)"
 
 # The live initramfs must stay small enough for GRUB and the kernel to place
