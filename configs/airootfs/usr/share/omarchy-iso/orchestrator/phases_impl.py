@@ -857,20 +857,21 @@ def _stage_image_files_under(top: Path, placed: list[tuple[Path, str]],
     """Move what the image holds under each FAT mountpoint out of its
     subvolume into stage: once that filesystem is mounted it would hide them.
     The kernel package puts its device trees in /boot/dtbs, where the ESP
-    mounts, and Snapdragon setup reads them from there. A subvolume placed
-    below the mountpoint stays where its mount expects it, and a stage left
-    by an earlier attempt is dropped first.
+    mounts, and Snapdragon setup reads them from there. A subvolume or
+    another FAT filesystem mounted below the mountpoint is left to its own
+    mount, and a stage left by an earlier attempt is dropped first.
 
     FAT has no symlinks, so a link is staged as what it names. Everything is
     copied before anything is removed, so every link is read while what it
     names is still in place; a link that names nothing is dropped."""
     shutil.rmtree(stage, ignore_errors=True)
+    own_mounts = [mountpoint for mountpoint, _ in placed] + mountpoints
     trees = []
     for rel in mountpoints:
         under, rest = _image_dir_for(placed, rel)
         content = top / under / rest
         if content.is_dir() and not content.is_symlink():
-            keep = {mountpoint.relative_to(rel) for mountpoint, _ in placed
+            keep = {mountpoint.relative_to(rel) for mountpoint in own_mounts
                     if mountpoint.is_relative_to(rel) and mountpoint != rel}
             trees.append((rel, content, keep))
     for rel, content, keep in trees:

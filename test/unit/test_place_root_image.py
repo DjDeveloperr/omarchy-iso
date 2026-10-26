@@ -296,6 +296,24 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertEqual((self.target / "boot/kernel.efi").read_text(), "boot/kernel.efi")
         self.assertEqual((self.target / "efi/current.efi").read_text(), "boot/kernel.efi")
 
+    def test_an_esp_mounted_inside_another_fat_mount_keeps_its_own_files(self):
+        # FAT at /boot and at /boot/efi: each gets what the image held under
+        # it, and the outer one leaves the inner mountpoint to it.
+        self.image_files = ["boot/dtbs/qcom/a.dtb", "boot/efi/EFI/BOOT/BOOTAA64.EFI"]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+            {"target": str(self.target / "boot/efi"), "source": "/dev/vda3", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+        ]
+        self.install()
+        self.assertEqual((self.target / "boot/dtbs/qcom/a.dtb").read_text(), "boot/dtbs/qcom/a.dtb")
+        self.assertEqual((self.target / "boot/efi/EFI/BOOT/BOOTAA64.EFI").read_text(),
+                         "boot/efi/EFI/BOOT/BOOTAA64.EFI")
+        at_boot = self.ctx.state_dir / "image-top" / "@" / "boot"
+        self.assertEqual([p.name for p in at_boot.iterdir()], ["efi"])
+        self.assertEqual(list((at_boot / "efi").iterdir()), [])
+
     def test_other_filesystems_are_left_to_their_own_mounts(self):
         self.image_files = ["srv/data/readme"]
         self.mounts.append(
