@@ -827,6 +827,62 @@ def _make_subvolume_with_image_files(top: Path, name: str, content: Path) -> Non
         shutil.rmtree(staged)
 
 
+# The filesystems an ESP has: no symlinks, owners or modes, so what is copied
+# onto them is the files, with links followed.
+FAT_FILESYSTEMS = ("vfat", "msdos", "fat", "exfat")
+
+
+def _fat_mounts(mounts: list[dict], target: Path) -> list[Path]:
+    """Every FAT filesystem mounted below the target (the ESP at /boot),
+    relative to the target root, parents first."""
+    return [Path(m["target"]).relative_to(target) for m in mounts
+            if m["fstype"] in FAT_FILESYSTEMS and Path(m["target"]).is_relative_to(target)
+            and Path(m["target"]) != target]
+
+
+def _image_dir_for(placed: list[tuple[Path, str]], mountpoint: Path) -> tuple[str, Path]:
+    """The subvolume holding the image's files at mountpoint (relative to the
+    target root), and the path inside it: @, or the placed subvolume whose
+    mountpoint is the nearest one above."""
+    under, rest, depth = "@", mountpoint, -1
+    for placed_mountpoint, placed_name in placed:
+        if mountpoint.is_relative_to(placed_mountpoint) and len(placed_mountpoint.parts) > depth:
+            under, rest = placed_name, mountpoint.relative_to(placed_mountpoint)
+            depth = len(placed_mountpoint.parts)
+    return under, rest
+
+
+def _stage_image_files_under(top: Path, placed: list[tuple[Path, str]],
+                             mountpoints: list[Path], stage: Path) -> None:
+    """Move what the image holds under each FAT mountpoint out of its
+    subvolume into stage: once that filesystem is mounted it would hide them.
+    The kernel package puts its device trees in /boot/dtbs, where the ESP
+    mounts, and Snapdragon setup reads them from there. A subvolume placed
+    below the mountpoint stays where its mount expects it, and a stage left
+    by an earlier attempt is dropped first."""
+    shutil.rmtree(stage, ignore_errors=True)
+    for rel in mountpoints:
+        under, rest = _image_dir_for(placed, rel)
+        content = top / under / rest
+        if not content.is_dir() or content.is_symlink():
+            continue
+        for entry in list(content.iterdir()):
+            if any(mountpoint.is_relative_to(rel / entry.name) for mountpoint, _ in placed):
+                continue
+            (stage / rel).mkdir(parents=True, exist_ok=True)
+            shutil.move(str(entry), str(stage / rel / entry.name))
+
+
+def _restore_image_files_onto(stage: Path, target: Path, mountpoints: list[Path]) -> None:
+    """Copy what _stage_image_files_under moved aside onto the mounted FAT
+    filesystems, where a pacstrap install would have put it."""
+    for rel in mountpoints:
+        staged = stage / rel
+        if staged.is_dir() and any(staged.iterdir()):
+            subprocess.run(["cp", "-rL", f"{staged}/.", str(target / rel)], check=True)
+    shutil.rmtree(stage, ignore_errors=True)
+
+
 def _remount_option_string(options: str) -> str:
     # subvolid refers to the subvolume replaced here; subvol= names it.
     return ",".join(opt for opt in options.split(",") if not opt.startswith("subvolid="))
@@ -1015,6 +1071,8 @@ def _place_root_image(ctx: InstallContext) -> None:
     # shrunk for the ISO, to fill the partition.
     top = ctx.state_dir / "image-top"
     top.mkdir(parents=True, exist_ok=True)
+    stage = ctx.state_dir / "image-under-esp"
+    fat_mounts = _fat_mounts(mounts, target)
     with _time_step("F1.mount_top_for_reshape"):
         subprocess.run(["mount", "-o", "subvolid=5", device, str(top)], check=True)
     try:
@@ -1045,13 +1103,12 @@ def _place_root_image(ctx: InstallContext) -> None:
         with _time_step("F1.place_extra_subvolumes"):
             placed: list[tuple[Path, str]] = []
             for name, mountpoint in _extra_subvolumes(mounts, target, device):
-                under, rest, depth = "@", mountpoint, -1
-                for placed_mountpoint, placed_name in placed:
-                    if mountpoint.is_relative_to(placed_mountpoint) and len(placed_mountpoint.parts) > depth:
-                        under, rest = placed_name, mountpoint.relative_to(placed_mountpoint)
-                        depth = len(placed_mountpoint.parts)
+                under, rest = _image_dir_for(placed, mountpoint)
                 _make_subvolume_with_image_files(top, name, top / under / rest)
                 placed.append((mountpoint, name))
+
+        with _time_step("F1.stage_image_files_under_the_esp"):
+            _stage_image_files_under(top, placed, fat_mounts, stage)
     finally:
         subprocess.run(["umount", str(top)], check=False)
 
@@ -1062,6 +1119,9 @@ def _place_root_image(ctx: InstallContext) -> None:
             opts = _remount_option_string(mount["options"] or "")
             source = (mount["source"] or "").split("[")[0]
             subprocess.run(["mount", "-o", opts, source, str(mountpoint)], check=True)
+
+    with _time_step("F1.restore_image_files_onto_the_esp"):
+        _restore_image_files_onto(stage, target, fat_mounts)
 
     _write_phase_progress(ctx, 1.0)
 

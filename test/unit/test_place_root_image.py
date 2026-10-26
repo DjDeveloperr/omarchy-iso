@@ -63,6 +63,8 @@ class InstallRootImageDdTest(unittest.TestCase):
             Path(argv[3]).mkdir()
         elif argv[:3] == ["cp", "-a", "--reflink=always"]:
             shutil.copytree(argv[3].removesuffix("/."), argv[4], symlinks=True, dirs_exist_ok=True)
+        elif argv[:2] == ["cp", "-rL"]:
+            shutil.copytree(argv[2].removesuffix("/."), argv[3], dirs_exist_ok=True)
         elif self.fail_on and argv[: len(self.fail_on)] == self.fail_on:
             raise subprocess.CalledProcessError(1, argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -157,6 +159,85 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertEqual(list((top / "@" / "var").iterdir()), [])
         # @log stays as it was: pacman.log copied, nothing moved out of @.
         self.assertEqual((top / "@log" / "pacman.log").read_text(), "[2026-01-01] installed base\n")
+
+    def test_image_files_under_the_esp_land_on_it(self):
+        # The ESP mounts at /boot over the image's /boot, where the kernel
+        # package put its device trees; Snapdragon setup reads them from
+        # /boot/dtbs. They move out of @ and onto the ESP once it is mounted,
+        # as a pacstrap onto the mounted ESP would have left them.
+        dtb = "boot/dtbs/linux-omarchy/qcom/x1e80100-lenovo-yoga-slim7x.dtb"
+        self.image_files = [dtb]
+        self.mounts.append(
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"})
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((self.target / dtb).read_text(), dtb)
+        self.assertEqual(list((top / "@" / "boot").iterdir()), [])
+        self.assertLess(self.index(["mount", "-o", "rw,relatime,fmask=0077", "/dev/vda1"]),
+                        self.index(["cp", "-rL"]))
+        self.assertFalse((self.ctx.state_dir / "image-under-esp").exists())
+
+    def test_a_stage_left_by_an_earlier_attempt_is_dropped(self):
+        dtb = "boot/dtbs/linux-omarchy/qcom/x1e80100-lenovo-yoga-slim7x.dtb"
+        self.image_files = [dtb]
+        stale = self.ctx.state_dir / "image-under-esp" / "boot" / "dtbs"
+        stale.mkdir(parents=True)
+        (stale / "stale.dtb").write_text("stale")
+        self.mounts.append(
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"})
+        self.install()
+        self.assertEqual((self.target / dtb).read_text(), dtb)
+        self.assertFalse((self.target / "boot/dtbs/stale.dtb").exists())
+        self.assertFalse((self.target / "boot/dtbs/dtbs").exists())
+
+    def test_an_esp_below_a_placed_subvolume_gets_its_files_from_it(self):
+        # A /boot subvolume takes the image's /boot along; an ESP at
+        # /boot/efi below it gets what the image held there.
+        self.image_files = ["boot/efi/EFI/BOOT/startup.nsh"]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": f"{DEVICE}[/@boot]", "fstype": "btrfs",
+             "options": "rw,noatime,subvolid=262,subvol=/@boot"},
+            {"target": str(self.target / "boot/efi"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+        ]
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((self.target / "boot/efi/EFI/BOOT/startup.nsh").read_text(),
+                         "boot/efi/EFI/BOOT/startup.nsh")
+        self.assertEqual(list((top / "@boot" / "efi").iterdir()), [])
+
+    def test_a_subvolume_placed_inside_the_esp_stays_for_its_mount(self):
+        self.image_files = ["boot/dtbs/qcom/a.dtb", "boot/limine/BOOTAA64.EFI"]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+            {"target": str(self.target / "boot/dtbs"), "source": f"{DEVICE}[/@/boot/dtbs]", "fstype": "btrfs",
+             "options": "rw,noatime,subvolid=264,subvol=/@/boot/dtbs"},
+        ]
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((top / "@/boot/dtbs/qcom/a.dtb").read_text(), "boot/dtbs/qcom/a.dtb")
+        self.assertEqual((self.target / "boot/limine/BOOTAA64.EFI").read_text(), "boot/limine/BOOTAA64.EFI")
+        self.assertFalse((self.target / "boot/dtbs/qcom").exists())
+
+    def test_other_filesystems_are_left_to_their_own_mounts(self):
+        self.image_files = ["srv/data/readme"]
+        self.mounts.append(
+            {"target": str(self.target / "srv/data"), "source": "/dev/vdb1", "fstype": "ext4",
+             "options": "rw,relatime"})
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((top / "@" / "srv/data/readme").read_text(), "srv/data/readme")
+        self.assertFalse(any(c[:2] == ["cp", "-rL"] for c in self.calls), self.calls)
+
+    def test_nothing_is_copied_when_the_image_has_nothing_under_the_esp(self):
+        self.mounts.append(
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"})
+        self.install()
+        self.assertFalse(any(c[:2] == ["cp", "-rL"] for c in self.calls), self.calls)
 
     def test_a_subvolume_named_inside_at_becomes_one(self):
         # A name nested in @ (@/srv/data) is a plain directory in the image;
