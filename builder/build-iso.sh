@@ -879,8 +879,7 @@ root_image="$root_image_dir/omarchy-root.sfs"
 # The Try Omarchy layer (builder/build-try-layer.sh) beside it, which the boot
 # menu's Try entry mounts over the image. x86_64 only for now: aarch64 boards
 # boot through device-tree UKIs that do not take the Try entry.
-try_layer=""
-[[ $OMARCHY_ARCH == x86_64 ]] && try_layer="$root_image_dir/omarchy-try.sfs"
+try_layer="$root_image_dir/omarchy-try.sfs"
 mkdir -p "$root_image_dir"
 # Builds from before the raw image left a send stream (and, briefly, its
 # checksum) in the persistent build cache, where they would ship inside the

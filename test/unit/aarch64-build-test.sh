@@ -117,15 +117,10 @@ for cfg in grub.cfg loopback.cfg; do
       grep -Fq 'n1x-recovery' "$fixture/$platform-$cfg" && fail "recovery entry leaked into the $platform $cfg"
     fi
     grep -Eq '^%N1X_ONLY' "$fixture/$platform-$cfg" && fail "template markers remain in $cfg"
-    if [[ $platform == x86_64 ]]; then
-      # Try Omarchy is an x86_64 entry, so that menu shows for 3 s.
-      grep -Fqx 'timeout_style=menu' "$fixture/$platform-$cfg" || fail "$cfg ($platform) hides the menu with Try Omarchy"
-      grep -Fqx 'timeout=3' "$fixture/$platform-$cfg" || fail "$cfg ($platform) does not show the menu for 3 s"
-      grep -Fq -- "--id 'try'" "$fixture/$platform-$cfg" || fail "$cfg ($platform) lacks the Try Omarchy entry"
-    else
-      grep -Fqx 'timeout_style=hidden' "$fixture/$platform-$cfg" || fail "$cfg ($platform) shows the boot menu"
-      grep -Fqx 'timeout=0' "$fixture/$platform-$cfg" || fail "$cfg ($platform) waits at the boot menu"
-    fi
+    # Try Omarchy is on every platform, so every menu shows for 3 s.
+    grep -Fqx 'timeout_style=menu' "$fixture/$platform-$cfg" || fail "$cfg ($platform) hides the menu with Try Omarchy"
+    grep -Fqx 'timeout=3' "$fixture/$platform-$cfg" || fail "$cfg ($platform) does not show the menu for 3 s"
+    grep -Fq -- "--id 'try'" "$fixture/$platform-$cfg" || fail "$cfg ($platform) lacks the Try Omarchy entry"
   done
 done
 
@@ -142,6 +137,13 @@ grub="$ROOT/configs/grub/grub.cfg"
 grep -Fq 'smbios --type 4 --get-string 7 --set cpu_maker' "$grub" || fail "GRUB does not ask the firmware who made the processor"
 [[ $(grep -c 'default=archlinux-uki' "$grub") == $(grep -B1 'default=archlinux-uki' "$grub" | grep -c "regexp '") ]] \
   || fail "the device tree entry is the default on a machine that is not a Snapdragon"
+# Try on a Snapdragon laptop boots the same UKI with the same arguments, and
+# the Try ones; it is never the default.
+uki_args=$(grep -A1 -- "--id 'archlinux-uki'" "$grub" | sed -n 's/^ *chainloader //p')
+try_args=$(grep -A1 -- "--id 'try-uki'" "$grub" | sed -n 's/^ *chainloader //p')
+[[ -n $uki_args && $try_args == "$uki_args omarchy.try=1 systemd.gpt_auto=0" ]] \
+  || fail "the device tree Try entry does not boot the live UKI with Try's arguments: $try_args"
+grep -q 'default=try' "$grub" && fail "a Try entry is a default"
 
 # --- manifest filter -----------------------------------------------------------
 source "$ROOT/builder/aarch64-package-filter.sh"
