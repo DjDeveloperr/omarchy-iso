@@ -363,3 +363,28 @@ slept=$(<"$work/slept")
 ((status == 1)) || fail "the live root bootstrap did not fail (status $status)"
 ((slept <= 3 * (60 + 10) + 3 * 40)) || fail "three 60 s bootstrap attempts took ${slept}s"
 echo "ok - the live-SSH waits keep to their budget when each attempt takes 5 s"
+
+# ------------------------------------------ the first boot's update units
+#
+# The installer marks updates as applied after its last pacman transaction,
+# so an install from this tree must skip the ConditionNeedsUpdate= units on
+# its first boot. A released ISO from before that change runs them; it is
+# installed only to start an upgrade from, so that is noted, not failed.
+
+take check_first_boot_update_units
+units="$work/first-boot-update-units.txt"
+printf 'Id=ldconfig.service\nConditionResult=no\n\nId=systemd-sysusers.service\nConditionResult=no\n' >"$units"
+RELEASE_ISO=false
+run check_first_boot_update_units "$units"
+((status == 0)) || fail "a first boot that skipped the update units failed: $(cat "$work/out")"
+
+printf 'Id=ldconfig.service\nConditionResult=yes\n\nId=systemd-sysusers.service\nConditionResult=no\n' >"$units"
+run check_first_boot_update_units "$units"
+((status == 1)) || fail "an install from this tree that ran the update units passed (status $status)"
+grep -q "First boot ran the ConditionNeedsUpdate= units" "$work/out" || fail "no message: $(cat "$work/out")"
+
+RELEASE_ISO=true
+run check_first_boot_update_units "$units"
+((status == 0)) || fail "a release ISO that ran the update units failed the install: $(cat "$work/out")"
+grep -q "First boot ran the ConditionNeedsUpdate= units" "$work/out" || fail "the release's first boot was not noted: $(cat "$work/out")"
+echo "ok - only an install from this tree fails for running the first boot's update units"

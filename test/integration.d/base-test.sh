@@ -18,6 +18,9 @@ INSTALL_TIMEOUT="${OMARCHY_INTEGRATION_INSTALL_TIMEOUT:-2400}"
 # install times measure the installer rather than the host (CI sets it).
 DISK_CACHE="${OMARCHY_INTEGRATION_DISK_CACHE:-}"
 NO_PREVIEW="${OMARCHY_INTEGRATION_NO_PREVIEW:-false}"
+# true when the ISO is a shipped release rather than a build of this tree:
+# what only this tree's installer does is then noted instead of checked.
+RELEASE_ISO="${OMARCHY_INTEGRATION_RELEASE_ISO:-false}"
 BOOT_TIMEOUT=600
 
 GUEST_USER="omarchy"
@@ -1009,6 +1012,19 @@ install_unattended() {
   wait_for_unattended_install install "$serial"
 }
 
+# The installer marks updates as applied after its last pacman transaction,
+# so the first boot must skip every ConditionNeedsUpdate= unit; a "yes" is
+# 1-2 s of repeated work on every fresh install. A released ISO from before
+# that change runs them and can no longer be changed: installed only to
+# start an upgrade from, its first boot is noted, not failed.
+check_first_boot_update_units() {
+  local units="$1"
+
+  grep -q '^ConditionResult=yes' "$units" 2>/dev/null || return 0
+  echo "First boot ran the ConditionNeedsUpdate= units (see $units)" >&2
+  [[ $RELEASE_ISO == true ]]
+}
+
 install_phase() {
   log "Installing $(basename "$ISO") unattended via cidata (headless)"
 
@@ -1051,16 +1067,11 @@ install_phase() {
 
   # This is the only first boot the harness ever sees, so it is where the
   # first-boot cost gets recorded: systemd's own timing, and whether the
-  # ConditionNeedsUpdate= units ran. The installer marks updates as applied
-  # after its last pacman transaction, so they must all have been skipped;
-  # a "yes" here is 1-2 s of repeated work on every fresh install.
+  # ConditionNeedsUpdate= units ran.
   ssh_sudo "systemd-analyze; systemd-analyze blame | head -n 15" >"$BASE_DIR/first-boot-analyze.txt" 2>/dev/null || true
   ssh_sudo "systemctl show ldconfig.service systemd-hwdb-update.service systemd-journal-catalog-update.service systemd-sysusers.service -p Id -p ConditionResult" \
     >"$BASE_DIR/first-boot-update-units.txt" 2>/dev/null || true
-  if grep -q '^ConditionResult=yes' "$BASE_DIR/first-boot-update-units.txt" 2>/dev/null; then
-    echo "First boot ran the ConditionNeedsUpdate= units (see $BASE_DIR/first-boot-update-units.txt)" >&2
-    return 1
-  fi
+  check_first_boot_update_units "$BASE_DIR/first-boot-update-units.txt" || return 1
 
   # Everything the boot and the install read off the install medium, as QEMU
   # counted it at the ISO drive: the number a slow USB stick turns into time.
