@@ -219,7 +219,7 @@ umount -R "$merged"
 # Keep xattrs: overlayfs marks opaque directories with one, and a whiteout is
 # a 0:0 character device; both must survive for the layer to hide what it
 # deleted.
-mksquashfs "$upper" "$output" -comp zstd -Xcompression-level 3 -noappend -quiet
+mksquashfs "$upper" "$output" -comp zstd -Xcompression-level 19 -b 1M -noappend -quiet
 echo "Try layer: $(du -h "$output" | cut -f1) at $output"
 
 [[ -n $pacman_conf ]] || exit 0
@@ -271,7 +271,7 @@ driver_layer() { # name, script, lspci line, PCI vendor, device, class
   rm -rf "$stubs"
   umount -R "$root"
   mksquashfs "$dir/upper" "$(dirname "$output")/omarchy-try-$name.sfs" \
-    -comp zstd -Xcompression-level 3 -noappend -quiet
+    -comp zstd -Xcompression-level 19 -b 1M -noappend -quiet
   echo "Try $name layer: $(du -h "$(dirname "$output")/omarchy-try-$name.sfs" | cut -f1) (${packages[*]})"
   rm -rf "$dir"
 }
