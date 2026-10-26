@@ -16,6 +16,7 @@ ITER_TIME = 2000
 KEY_SIZE = 512
 MIN_MEMORY = 65536
 MAX_MEMORY = 1048576
+SECTOR_SIZE = 4096
 
 
 def memory_total() -> int:
@@ -120,7 +121,43 @@ def cached_options(iter_time: int, key_size: int) -> list[str]:
             "--pbkdf-memory", str(data["memory"]), "--pbkdf-parallel", str(data["parallel"])]
 
 
+def sector_size_fits(device: str) -> bool:
+    """cryptsetup refuses a sector size that does not divide the device."""
+    try:
+        fd = os.open(device, os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            size = os.lseek(fd, 0, os.SEEK_END)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+    return size > 0 and size % SECTOR_SIZE == 0
+
+
+def with_sector_size(command: list[str]) -> list[str]:
+    """Encrypt in 4096-byte sectors, btrfs's own block size: with
+    cryptsetup's default of 512 every 4 KiB block is eight cipher requests,
+    and the sector size cannot change after the format without rewriting
+    the whole volume. The device follows luksFormat on both install paths.
+    A device whose size 4096 does not divide keeps the default rather than
+    failing the format.
+    """
+    if (not command or command[0] != "cryptsetup" or "luksFormat" not in command
+            or "--sector-size" in command):
+        return command
+    index = command.index("luksFormat") + 1
+    if index >= len(command) or not sector_size_fits(command[index]):
+        return command
+    return command[:index + 1] + ["--sector-size", str(SECTOR_SIZE)] + command[index + 1:]
+
+
 def format_command(command: list[str]) -> list[str]:
+    """The installer's luksFormat: 4096-byte sectors, then this boot's
+    Argon2id calibration."""
+    return calibrated_command(with_sector_size(command))
+
+
+def calibrated_command(command: list[str]) -> list[str]:
     """Only the known LUKS2/Argon2id format contract may use this cache.
 
     Preserve custom policies and every non-format command verbatim. In
@@ -155,9 +192,8 @@ def main() -> None:
     elif len(sys.argv) == 3 and sys.argv[1] == "format":
         stop_calibration()
         # Same free-space format, with the existing defaults made explicit.
-        command = ["cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode",
-                   "--pbkdf", "argon2id", "--key-size", "512", "--iter-time", "2000",
-                   sys.argv[2], "-"]
+        command = ["cryptsetup", "luksFormat", sys.argv[2], "--type", "luks2", "--batch-mode",
+                   "--pbkdf", "argon2id", "--key-size", "512", "--iter-time", "2000", "-"]
         os.execvp("cryptsetup", format_command(command))
     else:
         raise SystemExit("usage: omarchy-luks-calibrate calibrate | format DEVICE")

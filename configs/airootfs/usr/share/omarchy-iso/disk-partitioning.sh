@@ -121,7 +121,9 @@ create_partition() {
   # earlier install's 2GiB ESP) would be taken for it and formatted.
   before=$(partition_numbers "$disk") || return 1
 
-  parted --script "$disk" mkpart primary "$fstype" "${start}B" "${end}B" || return 1
+  # parted's end is the last byte of the partition, so end - 1: the partition
+  # is exactly end - start, which LUKS needs to use 4096-byte sectors.
+  parted --script "$disk" mkpart primary "$fstype" "${start}B" "$((end - 1))B" || return 1
   partprobe "$disk" 2>/dev/null || true
   udevadm settle 2>/dev/null || true
 

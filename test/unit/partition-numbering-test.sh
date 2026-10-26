@@ -101,6 +101,9 @@ check "root is not the predicted number" "not-6" "$([[ $root_num == 6 ]] && echo
 check "both creations tracked for rollback" "2 3" "${created_parts[*]}"
 check_size "esp size" "$((200 * MIB))" "$(partition_size_bytes "$IMG" "$esp_num")"
 check_size "root size" "$((799 * MIB))" "$(partition_size_bytes "$IMG" "$root_num")"
+# Exactly end - start, not a sector more: LUKS with 4096-byte sectors refuses
+# a device whose size is not a multiple of 4096.
+check "root is exactly end - start" "$((799 * MIB))" "$(partition_size_bytes "$IMG" "$root_num")"
 
 echo "==> rollback reclaims only what this run created"
 rollback_created_parts "$IMG"

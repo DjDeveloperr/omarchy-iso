@@ -1223,6 +1223,22 @@ verify_preserved_partitions() {
   log "WINDOWS_ESP and WINDOWS_DATA (with its marker file) are intact"
 }
 
+# The installer encrypts in 4096-byte sectors, which cryptsetup refuses on a
+# partition whose size 4096 does not divide; both paths make one that it does.
+verify_luks_sector_size() {
+  local report="$RUN_DIR/luks-sector-size.txt" sector size
+  ssh_guest "echo $GUEST_PASSWORD | sudo -S -p '' sh -c '
+      dev=\$(blkid -t TYPE=crypto_LUKS -o device | head -n 1)
+      echo size \$(blockdev --getsize64 \$dev); cryptsetup luksDump \$dev'" >"$report" 2>&1 || true
+  sector=$(awk '$1 == "sector:" { print $2; exit }' "$report")
+  size=$(awk '$1 == "size" { print $2; exit }' "$report")
+  if [[ $sector != 4096 ]] || ((size % 4096)); then
+    echo "The root's LUKS sectors are ${sector:-unknown} bytes on a ${size:-unknown}-byte partition; see $report" >&2
+    return 1
+  fi
+  log "The root's LUKS sectors are 4096 bytes on a $size-byte partition"
+}
+
 install_phase() {
   log "Installing $(basename "$ISO") into a fresh VM (headless, driven via console)"
 
@@ -1260,6 +1276,7 @@ install_phase() {
   fi
   bootstrap_ssh
   $FREE_SPACE && verify_preserved_partitions
+  $ENCRYPT && verify_luks_sector_size
 
   # SSH can come up (console bootstrap logs in on a spare TTY) while
   # omarchy-provision-owner is still finalizing the user and re-keying LUKS. Saving
