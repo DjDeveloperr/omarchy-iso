@@ -559,7 +559,7 @@ EOF
 # Root SSH into the live ISO itself (not the installed system). The live root
 # runs sshd and autologs in on tty1 with an empty password, but sshd refuses
 # empty passwords, so authorize our key the same console-login way as above,
-# on tty3 (tty1 is the installer's).
+# on tty3 and up (tty1 is the installer's).
 ssh_live_root() {
   ssh -i "$SSH_KEY" -p "$SSH_PORT" \
     -o BatchMode=yes \
@@ -597,44 +597,66 @@ EOF
     for i in 1 2 3; do press ret; sleep 2; done
   fi
 
-  local waited=0
-  while true; do
-    press ctrl-alt-f3
-    sleep 4
-    ocr_screen | grep -qi "login:" && break
-    ((waited += 8))
+  # The live boot can switch the VT back to tty1 after the login prompt has
+  # shown on the spare one: on a run of used-disk, "root", Return and this
+  # curl line all went into the installer's wizard on tty1, and the scenario
+  # timed out waiting for a command that never ran. So a root prompt must be
+  # on screen before the command is typed, the VT is selected again right
+  # before each line, and an attempt that still loses its console moves to a
+  # fresh getty (tty3, tty4, tty5), as bootstrap_ssh does.
+  local attempt vt waited deadline up=false
+  for attempt in 1 2 3; do
+    vt=$((attempt + 2))
+    waited=0
+    while true; do
+      press "ctrl-alt-f$vt"
+      sleep 4
+      ocr_screen | grep -qi "login:" && break
+      ((waited += 8))
 
-    if ((waited >= 300)); then
-      capture_console "failure-live-console-timeout"
-      echo "Timed out waiting for a live console login prompt" >&2
-      return 1
-    fi
-    sleep 4
-  done
+      if ((waited >= 300)); then
+        capture_console "failure-live-console-timeout"
+        echo "Timed out waiting for a live console login prompt" >&2
+        return 1
+      fi
+      sleep 4
+    done
 
-  type_text root
-  press ret
-  sleep 2
-  # The password is empty; login still prompts for it.
-  ocr_screen | grep -qi "password" && { press ret; sleep 2; }
-
-  type_text "curl -fsS http://10.0.2.2:$HTTP_PORT/bootstrap-live -o /tmp/bs && bash /tmp/bs"
-  press ret
-
-  waited=0
-  until ssh_live_root true 2>/dev/null; do
-    if ! vm_running; then
-      echo "VM exited while waiting for live root SSH" >&2
-      return 1
-    fi
-    if ((waited >= 180)); then
-      capture_console "failure-live-ssh-timeout"
-      echo "Timed out waiting for root SSH on the live ISO" >&2
-      return 1
-    fi
+    press "ctrl-alt-f$vt"
+    type_text root
+    press ret
     sleep 2
-    ((waited += 2))
+    # The password is empty; login may still prompt for it.
+    ocr_screen | grep -qi "password" && { press ret; sleep 2; }
+    # The shell prompt, root@archiso ~ #. OCR reads its red "root@" as
+    # noise, so match the rest: the login banner, "archiso login:", has no #.
+    if ! wait_for_screen "archiso [^l]*#" 30; then
+      log "No root prompt on tty$vt (attempt $attempt); retrying on the next VT"
+      continue
+    fi
+
+    press "ctrl-alt-f$vt"
+    type_text "curl -fsS http://10.0.2.2:$HTTP_PORT/bootstrap-live -o /tmp/bs && bash /tmp/bs"
+    press ret
+
+    # By the clock: a refused attempt can itself take ConnectTimeout.
+    deadline=$((SECONDS + 60))
+    until ssh_live_root true 2>/dev/null && up=true; do
+      if ! vm_running; then
+        echo "VM exited while waiting for live root SSH" >&2
+        return 1
+      fi
+      ((SECONDS >= deadline)) && break
+      sleep 2
+    done
+    [[ $up == true ]] && break
+    capture_console "failure-live-ssh-timeout-$attempt"
+    log "Root SSH did not come up after the console login on tty$vt (attempt $attempt); retrying on the next VT"
   done
+  if [[ $up != true ]]; then
+    echo "Live root SSH bootstrap failed after 3 console logins" >&2
+    return 1
+  fi
   capture_console "success-live-root-ssh"
 
   kill "$HTTP_PID" 2>/dev/null || true

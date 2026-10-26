@@ -165,6 +165,55 @@ if [[ ! -s $work/typed ]] || grep -qv '^us ' "$work/typed"; then
 fi
 echo "ok - the live ISO is typed into as us under a uk install"
 
+# The live boot can take the VT back for tty1's installer after the login
+# prompt has shown: the bootstrap command is typed only at a root prompt, on
+# the VT just selected again, and an attempt that loses its console moves to
+# the next VT instead of typing into the wizard.
+type_text() { echo "$(grep ctrl-alt-f "$work/pressed" | tail -n1) $1" >>"$work/typed"; }
+# tty3's root prompt never shows; tty4's does.
+wait_for_screen() { [[ $(grep ctrl-alt-f "$work/pressed" | tail -n1) != ctrl-alt-f3 ]]; }
+ssh_live_root() { grep -q curl "$work/typed"; }
+: >"$work/pressed"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+((status == 0)) || fail "a lost root prompt on tty3 ended the scenario: $(cat "$work/out")"
+grep -q '^ctrl-alt-f3 curl' "$work/typed" && fail "the bootstrap command was typed where no root prompt showed"
+grep -q '^ctrl-alt-f4 curl' "$work/typed" || fail "the second attempt did not type on tty4: $(cat "$work/typed")"
+echo "ok - the live root bootstrap types only at a root prompt, retrying on the next VT"
+
+# The root prompt is matched in what OCR makes of it: the red "root@" comes
+# out as noise, so the pattern rests on the rest, and the login banner alone
+# ("archiso login: root") must not pass for a shell.
+take bootstrap_live_root_ssh
+ocr_screen() { echo "archiso login:"; }
+wait_for_screen() { grep -qi "$1" <<<"$screen"; }
+ssh_live_root() { grep -q curl "$work/typed"; }
+type_text() { echo "$(grep ctrl-alt-f "$work/pressed" | tail -n1) $1" >>"$work/typed"; }
+screen=$'Omarchy 7.2.8-9-omarchy (tty3)\narchiso login: root\n11 iGarchiso \u00a5 #'
+: >"$work/pressed"; : >"$work/typed"
+run bootstrap_live_root_ssh
+((status == 0)) || fail "the root prompt as OCR reads it was not taken for a shell: $(cat "$work/out")"
+grep -q '^ctrl-alt-f3 curl' "$work/typed" || fail "the bootstrap command was not typed at the root prompt: $(cat "$work/typed")"
+screen=$'Omarchy 7.2.8-9-omarchy (tty3)\narchiso login: root'
+: >"$work/pressed"; : >"$work/typed"
+run bootstrap_live_root_ssh
+grep -q curl "$work/typed" && fail "the bootstrap command was typed at a login banner: $(cat "$work/typed")"
+echo "ok - the root prompt is recognised as OCR reads it, and a login banner is not"
+
+# SSH that never comes up fails after tty3, tty4 and tty5, within a bounded wait.
+wait_for_screen() { true; }
+ssh_live_root() { false; }
+echo 0 >"$work/slept"
+: >"$work/pressed"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+slept=$(<"$work/slept")
+((status == 1)) || fail "a live root SSH that never came up did not fail (status $status)"
+[[ $(grep -c curl "$work/typed") == 3 ]] || fail "expected three bootstrap attempts: $(cat "$work/typed")"
+grep -q '^ctrl-alt-f5 curl' "$work/typed" || fail "the last attempt did not use tty5: $(cat "$work/typed")"
+((slept <= 300)) || fail "three failed live root logins took ${slept}s"
+echo "ok - live root SSH that never comes up fails after three VTs"
+
 # The factory first boot's keyboard step takes English (US) and loads it,
 # so what the form asks for next is typed as us: on uk keys, a password
 # with an @ arrives with a " in its place.
