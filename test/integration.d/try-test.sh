@@ -49,7 +49,8 @@ start_vm "$disk" "$RUN_DIR/serial.log" \
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
   -device ide-cd,drive=cdrom0,bootindex=2
 check "GRUB offers Try Omarchy within its countdown" pick_try
-check "Try Omarchy reaches the desktop" wait_for_screen "Keybindings" 300
+# Omarchy's first-login notifications: any of them is the desktop.
+check "Try Omarchy reaches the desktop" wait_for_screen "Keybindings\|Setup Git\|Update System" 300
 capture_console "success-try-desktop"
 
 mkdir -p "$BASE_DIR/www"
