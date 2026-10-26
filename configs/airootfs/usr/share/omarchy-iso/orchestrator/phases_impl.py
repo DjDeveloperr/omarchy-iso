@@ -866,11 +866,24 @@ def _stage_image_files_under(top: Path, placed: list[tuple[Path, str]],
         content = top / under / rest
         if not content.is_dir() or content.is_symlink():
             continue
-        for entry in list(content.iterdir()):
-            if any(mountpoint.is_relative_to(rel / entry.name) for mountpoint, _ in placed):
-                continue
-            (stage / rel).mkdir(parents=True, exist_ok=True)
-            shutil.move(str(entry), str(stage / rel / entry.name))
+        keep = [mountpoint.relative_to(rel) for mountpoint, _ in placed
+                if mountpoint.is_relative_to(rel) and mountpoint != rel]
+        _move_tree_except(content, stage / rel, keep)
+
+
+def _move_tree_except(content: Path, dest: Path, keep: list[Path]) -> None:
+    """Move everything under content into dest except the paths in keep
+    (relative to content), walking into the directories that hold one."""
+    for entry in list(content.iterdir()):
+        name = Path(entry.name)
+        if name in keep:
+            continue
+        inner = [k.relative_to(name) for k in keep if k.is_relative_to(name)]
+        if inner and entry.is_dir() and not entry.is_symlink():
+            _move_tree_except(entry, dest / name, inner)
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(entry), str(dest / name))
 
 
 def _restore_image_files_onto(stage: Path, target: Path, mountpoints: list[Path]) -> None:

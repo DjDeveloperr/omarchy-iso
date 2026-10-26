@@ -222,6 +222,23 @@ class InstallRootImageDdTest(unittest.TestCase):
         self.assertEqual((self.target / "boot/limine/BOOTAA64.EFI").read_text(), "boot/limine/BOOTAA64.EFI")
         self.assertFalse((self.target / "boot/dtbs/qcom").exists())
 
+    def test_files_beside_a_subvolume_deep_inside_the_esp_still_land_on_it(self):
+        # Only the subvolume stays: its parent directories are walked, and
+        # what sits beside it moves onto the ESP.
+        self.image_files = ["boot/EFI/Linux/omarchy.efi", "boot/EFI/BOOT/BOOTAA64.EFI", "boot/limine.conf"]
+        self.mounts += [
+            {"target": str(self.target / "boot"), "source": "/dev/vda1", "fstype": "vfat",
+             "options": "rw,relatime,fmask=0077"},
+            {"target": str(self.target / "boot/EFI/Linux"), "source": f"{DEVICE}[/@/boot/EFI/Linux]",
+             "fstype": "btrfs", "options": "rw,noatime,subvolid=265,subvol=/@/boot/EFI/Linux"},
+        ]
+        self.install()
+        top = self.ctx.state_dir / "image-top"
+        self.assertEqual((top / "@/boot/EFI/Linux/omarchy.efi").read_text(), "boot/EFI/Linux/omarchy.efi")
+        self.assertEqual((self.target / "boot/EFI/BOOT/BOOTAA64.EFI").read_text(), "boot/EFI/BOOT/BOOTAA64.EFI")
+        self.assertEqual((self.target / "boot/limine.conf").read_text(), "boot/limine.conf")
+        self.assertEqual(sorted(p.name for p in (top / "@/boot/EFI").iterdir()), ["Linux"])
+
     def test_other_filesystems_are_left_to_their_own_mounts(self):
         self.image_files = ["srv/data/readme"]
         self.mounts.append(
