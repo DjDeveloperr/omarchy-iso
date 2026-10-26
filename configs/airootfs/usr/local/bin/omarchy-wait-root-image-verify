@@ -111,7 +111,7 @@ fi
 finish_progress() {
   [[ $progress_drawn == true ]] || return 0
   [[ ${1:-} == full ]] &&
-    printf '\r%s: 100%%' "$label" >>"$OMARCHY_VERIFY_PROGRESS" 2>/dev/null
+    printf '\r%*s%s: 100%%' "${OMARCHY_VERIFY_PROGRESS_INDENT:-0}" '' "$label" >>"$OMARCHY_VERIFY_PROGRESS" 2>/dev/null
   printf '\n' >>"$OMARCHY_VERIFY_PROGRESS" 2>/dev/null || true
 }
 
@@ -198,9 +198,10 @@ await_verdict() {
         # configurator gate): a \r-updating percent line written to the path in
         # OMARCHY_VERIFY_PROGRESS (normally /dev/tty). Kept out of stdout, which
         # the orchestrator logs line by line, and stderr, whose first line
-        # headlines the dashboard on failure.
+        # headlines the dashboard on failure. OMARCHY_VERIFY_PROGRESS_INDENT
+        # spaces line it up with the caller's own text.
         if [[ -n ${OMARCHY_VERIFY_PROGRESS:-} ]] && pct=$(hash_pct); then
-          printf '\r%s: %3d%%' "$label" "$pct" >>"$OMARCHY_VERIFY_PROGRESS" 2>/dev/null || true
+          printf '\r%*s%s: %3d%%' "${OMARCHY_VERIFY_PROGRESS_INDENT:-0}" '' "$label" "$pct" >>"$OMARCHY_VERIFY_PROGRESS" 2>/dev/null || true
           progress_drawn=true
         fi
         # A medium that stopped answering stalls the read without failing it,

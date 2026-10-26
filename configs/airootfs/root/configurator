@@ -187,9 +187,9 @@ greeter() {
 }
 
 abort() {
-  gum style "${1:-$(t abort.default)}"
+  gum style --padding "0 0 0 ${PADDING_LEFT:-0}" "${1:-$(t abort.default)}"
   echo
-  gum style "$(t abort.retry ./.automated_script.sh)"
+  gum style --padding "0 0 0 ${PADDING_LEFT:-0}" "$(t abort.retry ./.automated_script.sh)"
   exit 1
 }
 
@@ -507,11 +507,12 @@ detect_windows_esp() {
     tmp_mp=$(mktemp -d)
     if mount -t vfat -o ro "$p" "$tmp_mp" 2>/dev/null; then
       if [[ -d "$tmp_mp/EFI/Microsoft" ]]; then
-        umount "$tmp_mp"; rmdir "$tmp_mp"
+        umount "$tmp_mp" 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
+        rmdir "$tmp_mp" 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
         echo "$p"
         return 0
       fi
-      umount "$tmp_mp"
+      umount "$tmp_mp" 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
     fi
     rmdir "$tmp_mp" 2>/dev/null || true
   done
@@ -850,7 +851,9 @@ run_partition_execute() {
     efi_dev=$(partition_path "$disk" "$efi_part_num")
     root_partition_device=$(partition_path "$disk" "$root_part_num")
 
-    partprobe "$disk"
+    # Its warnings go to stderr, which reaches the tty unpadded; keep them in
+    # the log.
+    partprobe "$disk" 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
     sync
     sleep 2
 
@@ -865,21 +868,19 @@ run_partition_execute() {
 
     if [[ "$encrypt_installation" == "true" ]]; then
       step "$(t partitions.luks "$root_partition_device")"
-      # Kept as pipes rather than routed through disk_step: the passphrase must
-      # not become an argv the process table can show. Folding stderr into
-      # stdout still lands any error in the install log.
+      # Through disk_step like the rest of the layout, so what cryptsetup and
+      # the calibration print lands in the install log, not unpadded on the
+      # screen. The passphrase comes from printf, a builtin, through a pipe:
+      # never an argv the process table can show, and no trailing newline,
+      # which cryptsetup would read as part of the key.
       # The same persistent open flags as orchestrator/luks_tuning.py: the
       # free-space path formats and opens here, before the orchestrator runs,
       # so that tuning does not reach it.
-      if ! printf "%s" "$password" |
-        omarchy-luks-calibrate format "$root_partition_device" 2>&1; then
-        disk_abort_hook "Formatting LUKS2 on $root_partition_device failed"
-      fi
-      if ! printf "%s" "$password" |
+      disk_step "Formatting LUKS2 on $root_partition_device" \
+        omarchy-luks-calibrate format "$root_partition_device" < <(printf "%s" "$password")
+      disk_step "Opening the encrypted root on $root_partition_device" \
         cryptsetup open --persistent --allow-discards --perf-no_read_workqueue \
-          "$root_partition_device" omarchy_root - 2>&1; then
-        disk_abort_hook "Opening the encrypted root on $root_partition_device failed"
-      fi
+          "$root_partition_device" omarchy_root - < <(printf "%s" "$password")
       root_mapper="/dev/mapper/omarchy_root"
     else
       root_mapper="$root_partition_device"
@@ -901,8 +902,8 @@ run_partition_execute() {
     for subvol in @ @home @log @pkg; do
       disk_step "creating subvolume $subvol" btrfs subvolume create "/mnt/btrfs-root/$subvol"
     done
-    umount /mnt/btrfs-root
-    rmdir /mnt/btrfs-root
+    umount /mnt/btrfs-root 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
+    rmdir /mnt/btrfs-root 2>>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}"
 
     disk_step "mounting the target root" \
       mount -o noatime,compress=zstd,subvol=@ "$root_mapper" /mnt
@@ -1046,9 +1047,9 @@ disk_form() {
 
 open_partition_tool() {
   step "$(t tool.title "$disk")"
-  gum style "$(t tool.hint)"
-  gum style --foreground 8 "$(t tool.warning)"
-  gum style --foreground 8 "$(t tool.tip)"
+  say "$(t tool.hint)"
+  say --foreground 8 "$(t tool.warning)"
+  say --foreground 8 "$(t tool.tip)"
   echo
   gum confirm --affirmative "$(t tool.open)" --negative "$(t common.back)" "$(t tool.prompt "$disk")" || return 0
 
@@ -1254,7 +1255,8 @@ if [[ $install_target == "free_space" ]]; then
   # shows movement instead of a frozen step header.)
   if [[ ${1:-} != "dry" ]]; then
     step "Verifying the install medium"
-    if ! verify_error=$(OMARCHY_VERIFY_PROGRESS=/dev/tty omarchy-wait-root-image-verify 2>&1 1>/dev/null); then
+    if ! verify_error=$(OMARCHY_VERIFY_PROGRESS=/dev/tty OMARCHY_VERIFY_PROGRESS_INDENT="$PADDING_LEFT" \
+      omarchy-wait-root-image-verify 2>&1 1>/dev/null); then
       abort "$(head -1 <<<"$verify_error")"
     fi
   fi
