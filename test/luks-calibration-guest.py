@@ -104,12 +104,19 @@ def exercise_formats(calibration, Luks2, report, expect_no_cache=False):
                 image.unlink()
             if cache is not None:
                 runs = {row['mode']: row for row in report['runs']}
-                ordinary = statistics.median(runs['absent']['unlock_seconds'])
-                cached = statistics.median(runs['cached']['unlock_seconds'])
-                report['cached_to_ordinary_unlock_ratio'] = cached / ordinary
+                report['cached_to_ordinary_unlock_ratio'] = (statistics.median(runs['cached']['unlock_seconds'])
+                                                             / statistics.median(runs['absent']['unlock_seconds']))
                 report['format_saved_seconds'] = runs['absent']['format_seconds'] - runs['cached']['format_seconds']
-                # CI is noisy; retain raw timings, but fail a material cost regression.
-                assert 0.70 <= cached / ordinary <= 1.40, report
+                # The cost of a guess is the KDF's: memory and parallelism are
+                # the cache's in every mode (above), so compare iterations, not
+                # unlock seconds, which move with the CI host's speed between
+                # two unlocks. Against both ordinary calibrations, because one
+                # benchmark alone varies too: absent 13 and malformed 10 within
+                # a minute on one runner, where unlock seconds put the cache at
+                # 0.59 of ordinary. Keep raw timings; fail a material weakening.
+                ordinary = statistics.median([runs['absent']['kdf']['time'], runs['malformed']['kdf']['time']])
+                report['cached_to_ordinary_iterations_ratio'] = runs['cached']['kdf']['time'] / ordinary
+                assert 0.70 <= report['cached_to_ordinary_iterations_ratio'] <= 1.40, report
                 assert report['format_saved_seconds'] > 1, report
             assert len({row['kdf']['salt'] for row in report['runs']}) == len(modes)
     finally:

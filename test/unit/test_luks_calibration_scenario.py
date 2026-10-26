@@ -64,6 +64,7 @@ class FormatCoverage(unittest.TestCase):
                                                 cached_options=lambda *_: ['costs'] if self.state.exists() else [])
         self.report = {'runs': []}
         self.calls = []
+        self.iterations, self.unlock = {}, {}
         calls, state = self.calls, self.state
         class Luks2:
             def __init__(self, image): self.image = image
@@ -83,10 +84,10 @@ class FormatCoverage(unittest.TestCase):
             # In the skipped case each normal format may choose a different
             # memory cap. There is no cached policy to compare it against.
             memory = 1048576 if self.has_cache else {'absent': 96082, 'malformed': 131072, 'archinstall': 262144}[mode]
-            kdf = dict(type='argon2id', time=13, memory=memory, cpus=4, salt=mode)
+            kdf = dict(type='argon2id', time=self.iterations.get(mode, 13), memory=memory, cpus=4, salt=mode)
             return types.SimpleNamespace(stdout=json.dumps({'keyslots': {'0': {'key_size': 64, 'kdf': kdf}}})), 0
         self.assertEqual(argv[1], 'open')
-        return types.SimpleNamespace(), 2
+        return types.SimpleNamespace(), self.unlock.get(mode, 2)
 
     def test_deliberate_skip_formats_and_unlocks_with_both_callers(self):
         self.has_cache = False
@@ -110,6 +111,27 @@ class FormatCoverage(unittest.TestCase):
         self.assertEqual(self.report['format_saved_seconds'], 6)
         self.assertIn(('archinstall', saved), self.calls)
         self.assertEqual(self.state.read_bytes(), saved)
+
+    def format_with_cache(self, iterations, unlock={}):
+        self.has_cache = True
+        self.iterations, self.unlock = iterations, unlock
+        self.cost['iterations'] = iterations['cached']
+        self.state.write_text(json.dumps(self.cost))
+        guest.exercise_formats(self.calibration, self.Luks2, self.report)
+
+    def test_an_equal_cost_passes_however_long_its_unlocks_took(self):
+        # CI run 40310348498: the unlock seconds put the cache at 0.59 of an
+        # ordinary format while the host's speed moved between unlocks.
+        self.format_with_cache(dict(cached=10, absent=13, malformed=10, archinstall=10),
+                               dict(cached=1.54, absent=2.61, malformed=2.04, archinstall=1.54))
+        self.assertAlmostEqual(self.report['cached_to_ordinary_iterations_ratio'], 10 / 11.5)
+        self.assertLess(self.report['cached_to_ordinary_unlock_ratio'], 0.70)
+
+    def test_a_materially_weaker_or_stronger_cache_fails(self):
+        for cached in (8, 19):
+            with self.subTest(cached=cached), self.assertRaisesRegex(AssertionError, 'iterations_ratio'):
+                self.report = {'runs': []}
+                self.format_with_cache(dict(cached=cached, absent=13, malformed=13, archinstall=cached))
 
     def test_small_memory_expectation_still_rejects_an_unexpected_cache(self):
         self.has_cache = True
