@@ -9,6 +9,8 @@
 #
 # install_disk_candidates() and install_mode_choices() decide those lists, and
 # the configurator calls them (checked by text below; it cannot be sourced).
+# Esc on either list goes back instead of ending the install, as on the
+# screens before them: 4.5.0rc2 quit the installer there.
 
 set -uo pipefail
 
@@ -96,8 +98,13 @@ check "disk list from install_disk_candidates" "1" \
   "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_disk_candidates "\$exclude_disk"')"
 check "mode list from install_mode_choices" "1" \
   "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_mode_choices "\$free_space_offered"')"
+check "Esc on the disk or mode list does not end the install" "0" \
+  "$(grep -E 't (disk|mode)\.header' "$CONFIGURATOR" | grep -c '|| abort')"
+check "Esc on the mode list goes back to the disk list" "1" \
+  "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_mode="other_disk"')"
+
 if ((failures > 0)); then
   echo "FAIL: $failures check(s) failed"
   exit 1
 fi
-echo "ok: the disk list opens on an internal disk, the mode list on full disk"
+echo "ok: the disk and mode screens open on full disk and go back on Esc"
