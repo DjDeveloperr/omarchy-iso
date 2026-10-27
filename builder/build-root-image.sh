@@ -3,8 +3,8 @@
 # Build the root filesystem image the installer writes instead of pacstrapping
 # every package on the target machine.
 #
-# The target install is the same ~940 packages for everyone; only the kernel,
-# CPU microcode, audio firmware and Tailscale vary per machine. So pacstrap the
+# The target install is the same ~900 packages for everyone; only audio
+# firmware, Tailscale and the T2 kernel vary per machine. So pacstrap the
 # invariant set once here, at build time, into a btrfs filesystem compressed at
 # a high zstd level (see IMAGE_COMPRESS below), shrink it, and pack the
 # filesystem image as independent 256 KiB zstd frames with a seek table
