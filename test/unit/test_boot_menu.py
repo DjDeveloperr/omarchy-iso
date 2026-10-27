@@ -1,8 +1,10 @@
-"""Unit tests for the boot menus.
+"""Unit tests for the boot menus: what they offer and how they look.
 
 The x86_64 menus offer Install and Try and nothing else, in GRUB (UEFI, and an
 ISO file booted through loopback.cfg) and in syslinux (BIOS), with the same
-countdown.
+countdown. The GRUB theme refers only to files builder/boot-menu-theme.sh
+makes and fonts grub.cfg loads, and its entries keep enough contrast for a
+person to read them and for test/integration.d's OCR to find them.
 """
 
 import re
@@ -15,6 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GRUB = ROOT / "configs/grub"
 SYSLINUX = ROOT / "configs/syslinux"
+THEME = GRUB / "themes/omarchy/theme.txt"
+THEME_BUILDER = ROOT / "builder/boot-menu-theme.sh"
 
 
 def configured(name, arch):
@@ -33,6 +37,16 @@ def configured(name, arch):
 def entries(config):
     return re.findall(r'^\s*menuentry\s+["\']([^"\']+)["\']', config, re.M)
 
+
+def luminance(hex_color):
+    channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast(a, b):
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
 
 
 class MenuEntries(unittest.TestCase):
@@ -61,11 +75,79 @@ class MenuEntries(unittest.TestCase):
         self.assertEqual(labels, ["Install Omarchy", "^Try Omarchy"])
         self.assertFalse((SYSLINUX / "archiso_tail.cfg").exists())
 
+    def test_bios_entries_fit_the_menu(self):
+        head = (SYSLINUX / "archiso_head.cfg").read_text()
+        width = int(re.search(r"^MENU WIDTH (\d+)$", head, re.M).group(1))
+        margin = int(re.search(r"^MENU MARGIN (\d+)$", head, re.M).group(1))
+        labels = []
+        for cfg in ("archiso_sys-linux.cfg", "archiso_pxe-linux.cfg"):
+            labels += re.findall(r"^MENU LABEL (.+)$", (SYSLINUX / cfg).read_text(), re.M)
+        # menumain.c gives an entry width - 2 * margin - 4 columns; the PXE
+        # test finds its entry by "NBD".
+        for label in labels:
+            self.assertLessEqual(len(label.replace("^", "")), width - 2 * margin - 4, label)
+
+    def test_bios_command_line_stays_on_screen(self):
+        head = (SYSLINUX / "archiso_head.cfg").read_text()
+        row = {key: int(re.search(rf"^MENU {key} (\d+)$", head, re.M).group(1))
+               for key in ("VSHIFT", "CMDLINEROW", "TABMSGROW", "HELPMSGROW", "HELPMSGENDROW")}
+        # vesamenu at 640x480 has 30 rows. menumain.c adds VSHIFT to the
+        # command line, tab message and help start rows, not to the help end.
+        for key in ("CMDLINEROW", "TABMSGROW", "HELPMSGROW"):
+            self.assertLess(row[key] + row["VSHIFT"], 30, key)
+        self.assertLess(row["HELPMSGENDROW"], 30)
+        self.assertGreaterEqual(row["HELPMSGENDROW"], row["HELPMSGROW"] + row["VSHIFT"])
+
     def test_bios_and_uefi_count_down_alike(self):
         grub_timeout = re.search(r"^timeout=(\d+)$", configured("grub.cfg", "x86_64"), re.M)
         bios_timeout = re.search(r"^TIMEOUT (\d+)$", (SYSLINUX / "archiso_sys.cfg").read_text(), re.M)
         # syslinux counts tenths of a second.
         self.assertEqual(int(bios_timeout.group(1)), int(grub_timeout.group(1)) * 10)
+
+
+class Theme(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.theme = THEME.read_text()
+        cls.builder = THEME_BUILDER.read_text()
+
+    def test_every_file_the_theme_names_is_built(self):
+        files = re.findall(r'file = "([^"]+)"', self.theme)
+        styles = re.findall(r'(?:_style|_frame|_thumb|terminal-box)\s*[:=]\s*"([^"*]+)\*\.png"', self.theme)
+        self.assertTrue(files and styles)
+        for name in files + [s + "c.png" for s in styles]:
+            stem = name.replace(".png", "")
+            self.assertTrue(name in self.builder or f"{stem.rsplit('_', 1)[0]}_$part.png" in self.builder
+                            or f'"$theme_dir/{name}"' in self.builder, f"{name} is not built")
+
+    def test_pixmaps_are_truecolor(self):
+        # A one-colour picture from ImageMagick is a 1-bit colormap PNG by
+        # default; GRUB cannot read that, and the selection bar vanished.
+        outputs = re.findall(r'^\s*magick .*?(\S+)(?: \|\| return 1)?$', self.builder, re.M)
+        self.assertTrue(outputs)
+        for output in outputs:
+            self.assertRegex(output, r"^PNG(24|32):", output)
+
+    def test_every_font_the_theme_names_is_built_and_loaded(self):
+        grub_cfg = (GRUB / "grub.cfg").read_text()
+        for family, weight, size in re.findall(r'"(JetBrains Mono) (Regular|Bold) (\d+)"', self.theme):
+            pf2 = f"jetbrains-mono-{weight.lower()}-{size}.pf2"
+            self.assertIn(f"/boot/grub/themes/omarchy/{pf2}", grub_cfg, f"{pf2} is not loaded")
+            self.assertRegex(self.builder, rf"for size in [\d ]*\b{size}\b", f"{pf2} is not built")
+
+    def test_entries_are_readable(self):
+        background = re.search(r'desktop-color: "(#[0-9a-f]{6})"', self.theme).group(1)
+        for key in ("item_color", "selected_item_color"):
+            color = re.search(rf'\b{key} = "(#[0-9a-f]{{6}})"', self.theme).group(1)
+            # WCAG AA for text. Tokyo Night's dark foreground (#565f89, 2.8:1)
+            # vanished from the harness's thresholded OCR, so try-test could
+            # not find "Try Omarchy".
+            self.assertGreaterEqual(contrast(color, background), 4.5, f"{key} {color} on {background}")
+
+    def test_the_menu_loads_the_theme_only_where_it_is(self):
+        grub_cfg = (GRUB / "grub.cfg").read_text()
+        self.assertIn("if [ -f /boot/grub/themes/omarchy/theme.txt ]; then", grub_cfg)
+        self.assertIn("export theme", grub_cfg)
 
 
 if __name__ == "__main__":
