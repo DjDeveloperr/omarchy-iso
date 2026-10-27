@@ -90,6 +90,9 @@ check "the boot skipped the ConditionNeedsUpdate= units" try_ssh \
   '! systemctl show ldconfig.service systemd-hwdb-update.service systemd-journal-catalog-update.service systemd-sysusers.service -p ConditionResult | grep -q yes'
 check "Hyprland runs with a monitor" try_ssh "hyprctl -j monitors | jq -e 'length > 0'"
 check "the Omarchy shell runs" try_ssh "pgrep -x quickshell"
+# An install adds these only on the machines that need them, so the root
+# image leaves them out; Try runs on whatever machine it boots.
+check "the session has the audio firmware" try_ssh "pacman -Q sof-firmware alsa-firmware >/dev/null"
 check "nothing on the machine's disk is mounted" try_ssh '! lsblk -nro MOUNTPOINTS /dev/vda | grep -q .'
 # Nothing waits for the keyring at boot; wait for it here.
 check "the session made its own pacman keyring" try_ssh \
