@@ -47,10 +47,18 @@ boot_from_ventoy() {
   # Ventoy's list holds the one ISO, selected. r switches to GRUB2 mode;
   # Enter boots, with no second menu (bin/omarchy-iso-test-ventoy-disk).
   check "Ventoy lists the ISO ($mode)" wait_for_screen "ventoy.net" 120
-  [[ $mode == grub2 ]] && press r && sleep 1
+  if [[ $mode == grub2 ]]; then
+    press r
+    # Ventoy marks the mode on its menu in red, "GRUB2 Mode", which
+    # tesseract can read as "GRUBZ". Both modes boot the same cmdline, so
+    # without this both runs could be normal mode.
+    check "Ventoy switched to GRUB2 mode" wait_for_screen "grub. mode" 30
+  fi
+  capture_console "ventoy-menu-$mode"
   press ret
 
   if wait_for_live_root_ssh 300; then
+    ssh_live_root "cat /proc/cmdline" >"$RUN_DIR/cmdline-$mode.txt" 2>/dev/null || true
     started_us=$(ssh_live_root "systemctl show -p UserspaceTimestampMonotonic --value" 2>/dev/null | tr -d '\r')
     log "Live root's PID 1 started ${started_us:-?} µs after the kernel ($mode mode)"
     check "the live initramfs found the Ventoy medium within ${MAX_INITRAMFS_SECONDS} s in $mode mode (PID 1 at ${started_us:-?} µs)" \
