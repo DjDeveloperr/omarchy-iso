@@ -234,6 +234,16 @@ jobs:
         with:
           name: iso-${{ github.run_id }}-x86_64
 
+      # The ventoy scenario boots the ISO from a real Ventoy stick. Making
+      # one takes a loop device and a mount, which the test container has
+      # no rights to, so the runner makes it, for the jobs that run every
+      # scenario.
+      - name: Make a Ventoy stick with the ISO
+        if: matrix.scenarios == ''
+        run: |
+          mkdir -p ventoy
+          bin/omarchy-iso-test-ventoy-disk release/*.iso ventoy/ventoy.img
+
       # The harness runs in an Arch container: Arch's current QEMU and OVMF
       # (QEMU 11) instead of the runner's older one, at the paths the
       # harness expects, the same as on an Omarchy workstation.
@@ -248,6 +258,9 @@ jobs:
           sudo chmod 0666 /dev/kvm
           variant_env=()
           for setting in $VARIANT_ENV; do variant_env+=(-e "$setting"); done
+          if [[ -f ventoy/ventoy.img ]]; then
+            variant_env+=(-e OMARCHY_INTEGRATION_VENTOY_DISK=/w/ventoy/ventoy.img)
+          fi
           docker run --rm --device /dev/kvm -v "$PWD:/w" -w /w \
             -e OMARCHY_INTEGRATION_DISK_CACHE=none -e OMARCHY_INTEGRATION_DISCARD_DISKS=1 \
             -e OMARCHY_INTEGRATION_VARIANT="$VARIANT" -e SCENARIOS -e OPTIONS -e MEMORY \
