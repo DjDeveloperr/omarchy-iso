@@ -250,7 +250,7 @@ jobs:
                 chmod 0755 /usr/local/bin/pacman
               fi
               sed -i "1i Server = https://mirror.omarchy.org/\$repo/os/\$arch" /etc/pacman.d/mirrorlist
-              pacman -Sy --noconfirm --needed parted dosfstools >/dev/null
+              pacman -Syu --noconfirm --needed parted dosfstools >/dev/null
               bin/omarchy-iso-test-ventoy-disk release/*.iso ventoy/ventoy.img
             '
 
