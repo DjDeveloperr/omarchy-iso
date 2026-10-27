@@ -824,14 +824,22 @@ printf '%s\n' "${required_package_files[@]}" |
 # root image from an older package than the mirror beside it advertises.
 rebuild_offline_repo_db
 
-# The root image is universal: it also holds the packages the installer used
-# to add on every target after unpacking the image (both CPU microcodes, the
-# audio firmware, Tailscale), so that package step finds nothing left to
-# install, which saves 6 to 8 s per install. They coexist safely: the kernel
-# loads only the microcode that matches the CPU, the audio firmware packages
-# do not conflict, and Tailscale is idle without an auth key.
+# The root image holds what every install gets. archinstall.packages also
+# names packages an install adds only on the machines that need them, so the
+# shipped mirror carries them; the image leaves those out:
+#   alsa-firmware, sof-firmware  archinstall's audio step adds each by the
+#                                sound driver the live system loaded, and
+#                                omarchy's sof-firmware.sh adds SOF on Intel
+#                                audio DSPs
+#   tailscale                    installed only when an autoinstall drive
+#                                staged an auth key
+# Both CPU microcodes stay in the image although a machine needs only one: the
+# pre-built UKI is made with autodetect skipped, so its microcode hook bundles
+# both, and every install early-loads its own on first boot.
 # omarchy-apply-system still installs more from omarchy-other.packages as the
 # hardware dictates.
+per_machine_packages=(alsa-firmware sof-firmware tailscale)
+
 # On aarch64 the image also holds what the x86_64 runtime pulls in by
 # dependency and the aarch64 one does not: the Limine/Snapper stack, which UEFI
 # aarch64 machines boot like x86_64 ones; and archlinuxarm-keyring, whose keys
@@ -840,18 +848,20 @@ image_arch_packages=()
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
   image_arch_packages=(archlinuxarm-keyring limine-mkinitcpio-hook limine-snapper-sync snapper)
 fi
-mapfile -t image_packages < <(
+image_package_list() {
   {
     # The architecture's list: on aarch64 the kernel is the image's and the
     # x86_64-only packages are gone.
-    grep -hv '^#\|^$' "$archinstall_packages_file"
+    grep -hv '^#\|^$' "$archinstall_packages_file" |
+      grep -Fxv -f <(printf '%s\n' "${per_machine_packages[@]}") || true
     grep -hv '^#\|^$' /builder/image.packages
     ((${#image_arch_packages[@]} == 0)) || printf '%s\n' "${image_arch_packages[@]}"
     # The shipped copy, which is what the install reads too.
     grep -hv '^#\|^$' "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
     printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"
   } | sort -u
-)
+}
+mapfile -t image_packages < <(image_package_list)
 
 # pacstrap resolves the image against the offline repo and, with CacheDir on
 # the mirror itself, extracts the package files in place instead of copying
