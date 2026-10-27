@@ -226,6 +226,14 @@ Icon=system-software-install
 Terminal=false
 EOF
 
+# The audio firmware an install adds only where the sound hardware needs it
+# (per_machine_packages in build-iso.sh), so the image leaves it out. A Try
+# session runs on whatever machine boots it: without SOF's firmware an Intel
+# laptop whose audio runs on its DSP has no sound.
+if [[ -n $pacman_conf ]]; then
+  pacstrap -C "$pacman_conf" -c -G -M "$merged" sof-firmware alsa-firmware >/dev/null
+fi
+
 # Built on the build host's clock and identity; the session makes its own.
 : >"$merged/etc/machine-id"
 
