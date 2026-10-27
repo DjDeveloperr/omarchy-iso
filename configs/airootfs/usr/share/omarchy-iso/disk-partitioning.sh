@@ -100,7 +100,11 @@ disk_step() {
     if (( status == 0 )) && [[ -n ${OMARCHY_INSTALL_LOG_FILE:-} ]]; then
       printf '%s\n' "$output" >>"$OMARCHY_INSTALL_LOG_FILE"
     else
-      printf '%s\n' "$output"
+      # Indented like the configurator's own text (PADDING_LEFT), wrapped to
+      # the width left beside it, so a long line does not wrap to column 0.
+      local width=$(( ${TERM_WIDTH:-${COLUMNS:-80}} - ${PADDING_LEFT:-0} ))
+      (( width < 20 )) && width=20
+      printf '%s\n' "$output" | fold -w "$width" | sed "s/^/$(printf '%*s' "${PADDING_LEFT:-0}" '')/"
     fi
   fi
   (( status == 0 )) && return 0
@@ -121,7 +125,12 @@ create_partition() {
   # earlier install's 2GiB ESP) would be taken for it and formatted.
   before=$(partition_numbers "$disk") || return 1
 
-  parted --script "$disk" mkpart primary "$fstype" "${start}B" "${end}B" || return 1
+  # parted's end is the last byte of the partition, so end - 1: the partition
+  # is exactly end - start, which LUKS needs to use 4096-byte sectors. Its
+  # warnings and errors go to the install log, not unpadded to the screen;
+  # the caller's abort says what failed.
+  parted --script "$disk" mkpart primary "$fstype" "${start}B" "$((end - 1))B" \
+    >>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}" 2>&1 || return 1
   partprobe "$disk" 2>/dev/null || true
   udevadm settle 2>/dev/null || true
 
@@ -146,7 +155,7 @@ create_partition() {
   tolerance=$((1024 * 1024))
   (( actual >= want - tolerance && actual <= want + tolerance )) || return 1
 
-  parted --script "$disk" name "$num" "$name" || true
+  parted --script "$disk" name "$num" "$name" >>"${OMARCHY_INSTALL_LOG_FILE:-/dev/null}" 2>&1 || true
 
   created_parts+=("$num")
   created_partition_number="$num"
@@ -195,20 +204,15 @@ install_disk_candidates() {
     sort -k1,1n -k2,2n | cut -f3
 }
 
-# The install modes for the disk screen's choice, the default first, as the
-# names select_installation acts on. On a disk that already holds partitions
-# ($2 of them) the default is the free-space install, which keeps them; the
-# full-disk install, which erases them, is one key away. $1 is whether the
-# free-space mode is on offer at all (UEFI, a partition table and room for
-# Omarchy).
+# The install modes for the disk screen's choice, in order, as the names
+# select_installation acts on. Full disk comes first on every disk, as the
+# common case; the overwrite confirmation that follows it names the disk
+# before anything is erased. $1 is whether the free-space mode is on offer at
+# all (UEFI, a partition table and room for Omarchy).
 install_mode_choices() {
-  local free_space_offered=$1 partitions=${2:-0}
-  if [[ $free_space_offered == true ]] && ((partitions > 0)); then
-    printf '%s\n' free_space full_disk
-  elif [[ $free_space_offered == true ]]; then
-    printf '%s\n' full_disk free_space
-  else
-    printf '%s\n' full_disk
+  printf '%s\n' full_disk
+  if [[ $1 == true ]]; then
+    printf '%s\n' free_space
   fi
   printf '%s\n' other_disk
 }

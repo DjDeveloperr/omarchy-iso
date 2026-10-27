@@ -70,9 +70,10 @@ install_from_slow_medium() {
     -device ide-cd,drive=cdrom0,bootindex=2 \
     -drive "file=$CIDATA_IMG,format=raw,if=none,id=cidata" \
     -device usb-storage,drive=cidata \
+    "${LIVE_CIDATA_SMBIOS[@]}" \
     -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.${VERIFY_UNIT}~99-test-timeout=$cred"
 
-  bootstrap_live_root_ssh
+  wait_for_live_root_ssh 300
 
   check "shrunk timeout is in effect" \
     ssh_live_root "systemctl show -p TimeoutStartUSec --value $VERIFY_UNIT | grep -qx 3min"

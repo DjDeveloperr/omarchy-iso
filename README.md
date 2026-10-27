@@ -2,7 +2,7 @@
 
 [![Nightly ISO Build](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml/badge.svg?branch=quattro&event=schedule)](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml?query=branch%3Aquattro+event%3Aschedule)
 
-The Omarchy ISO is the only supported way to install Omarchy. It ships the Omarchy Configurator, writes a pre-built Arch Linux + Omarchy root image (a zstd-compressed btrfs partition image) onto the target with `zstdcat | dd`, gives it a fresh filesystem id and grows it to the partition, installs the per-machine packages (kernel, microcode, audio firmware) from the bundled mirror, runs target system setup in the chroot, creates the user, and runs `omarchy-provision-user` for that user.
+The Omarchy ISO is the only supported way to install Omarchy. It ships the Omarchy Configurator, writes a pre-built Arch Linux + Omarchy root image (a zstd-compressed btrfs partition image) onto the target with `zstdcat | dd`, gives it a fresh filesystem id and grows it to the partition, installs the per-machine packages (audio firmware, and a kernel the image lacks) from the bundled mirror, runs target system setup in the chroot, creates the user, and runs `omarchy-provision-user` for that user.
 
 ## Get Omarchy
 
@@ -307,6 +307,8 @@ Artifacts — screenshots, the fixtured/staged/final `limine.conf`, the reset ty
 ```
 
 The evidence folder gets `report.md`, the update's output, and a picture of the desktop before and after.
+
+Pass `--release-iso` to `test/integration` when the ISO is a shipped release rather than a build of this tree. The install is then not held to what only this tree's installer does: a first boot that runs the `ConditionNeedsUpdate=` units, as the 4.0.6 ISO does, is noted instead of failing the install. The "Upgrade test" workflow and the nightly `stable` image pass it.
 
 The "Upgrade test" workflow does both steps from a release's ISO. Start it by hand, from the latest release to edge by default:
 

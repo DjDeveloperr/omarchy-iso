@@ -175,4 +175,64 @@ class ArchinstallBoundary(unittest.TestCase):
                 self.assertIs(real.run, runner)
 
 
+class SectorSize(unittest.TestCase):
+    """4096-byte encryption sectors where the device's size allows them."""
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(luks, 'STATE', self.directory / 'none.json'))
+
+    def device(self, size):
+        path = self.directory / f'disk-{size}'
+        with open(path, 'wb') as stream:
+            stream.truncate(size)
+        return str(path)
+
+    def test_archinstall_format_gets_4096_after_the_device(self):
+        device = self.device(64 * 1024 * 1024)
+        command = COMMAND[:-1] + [device]
+        self.assertEqual(luks.format_command(command), command + ['--sector-size', '4096'])
+
+    def test_a_size_4096_does_not_divide_keeps_the_default(self):
+        # parted's inclusive end used to leave free-space partitions one
+        # 512-byte sector over a MiB multiple; cryptsetup refuses 4096 there.
+        device = self.device(64 * 1024 * 1024 + 512)
+        command = COMMAND[:-1] + [device]
+        self.assertEqual(luks.format_command(command), command)
+
+    def test_missing_device_and_explicit_sector_size_are_left_alone(self):
+        self.assertEqual(luks.format_command(COMMAND), COMMAND)
+        command = COMMAND[:-1] + [self.device(64 * 1024 * 1024), '--sector-size', '512']
+        self.assertEqual(luks.format_command(command), command)
+
+    def test_calibration_still_applies(self):
+        device = self.device(64 * 1024 * 1024)
+        state = self.directory / 'result.json'
+        state.write_text(json.dumps(dict(schema=1, iter_time=2000, key_size=512, cpus=4,
+                                         iterations=13, memory=1048576, parallel=4)))
+        state.chmod(0o600)
+        fstat = os.fstat
+        def root_stat(fd):
+            st = fstat(fd)
+            return types.SimpleNamespace(st_uid=0, st_mode=st.st_mode, st_size=st.st_size)
+        with mock.patch.object(luks, 'STATE', state), \
+                mock.patch.object(luks, 'memory_total', return_value=8*1024*1024), \
+                mock.patch.object(luks, 'memory_available', return_value=4*1024*1024), \
+                mock.patch.object(luks.os, 'cpu_count', return_value=4), \
+                mock.patch.object(luks.os, 'fstat', side_effect=root_stat):
+            changed = luks.format_command(COMMAND[:-1] + [device])
+        self.assertEqual(changed[-2:], ['--sector-size', '4096'])
+        self.assertIn('--pbkdf-force-iterations', changed)
+        self.assertNotIn('--iter-time', changed)
+
+    def test_free_space_format_names_the_device_after_luksformat(self):
+        device = self.device(64 * 1024 * 1024)
+        with mock.patch.object(luks.sys, 'argv', ['omarchy-luks-calibrate', 'format', device]), \
+                mock.patch.object(luks, 'stop_calibration'), \
+                mock.patch.object(luks.os, 'execvp') as execvp:
+            luks.main()
+        argv = execvp.call_args.args[1]
+        self.assertEqual(argv[:5], ['cryptsetup', 'luksFormat', device, '--sector-size', '4096'])
+        self.assertEqual(argv[-1], '-')
+
+
 if __name__ == '__main__': unittest.main()

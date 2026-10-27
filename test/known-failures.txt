@@ -8,7 +8,8 @@
 #
 # omarchy-system-factory-reset removes other systems' boot entries from a
 # shared ESP, so a factory reset destroys a dual-boot setup
-# (basecamp/omarchy#6847).
+# (omacom/omarchy#13689). Fixed by omacom/omarchy#14949, in 4.5.0; PR ISOs
+# install stable, which does not carry it yet.
 2026-12-01 factory-reset windows entry survives staging
 2026-12-01 factory-reset foreign linux entry survives staging
 2026-12-01 factory-reset foreign boot directory survives staging

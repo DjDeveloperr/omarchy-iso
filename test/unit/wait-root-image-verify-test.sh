@@ -145,6 +145,7 @@ EOF
 
   local progress_env=()
   [[ -n ${WITH_HASHER_PROC:-}${WITH_MIRROR_HASHER:-} ]] && progress_env=(OMARCHY_VERIFY_PROGRESS="$box/progress")
+  [[ -n ${INDENT:-} ]] && progress_env+=(OMARCHY_VERIFY_PROGRESS_INDENT="$INDENT")
 
   set +e
   OUT=$(PATH="$box/bin:$PATH" OMARCHY_VERIFY_RETRY_SECONDS=0 OMARCHY_VERIFY_STALL_SECONDS="${STALL:-60}" \
@@ -172,6 +173,13 @@ check "progress line drawn while hashing" 0 "$RC" "" "$OUT"
   echo "ok: progress shows 50% then 100%" ||
   { echo "FAIL: progress output wrong: $(printf '%q' "$PROGRESS_OUT")"; fails=1; }
 [[ $OUT == *"50%"* ]] && { echo "FAIL: percent leaked into stdout/stderr"; fails=1; } || true
+
+# The configurator passes its left padding, so the line starts under its own
+# text instead of at column 0.
+INDENT=4 WITH_HASHER_PROC=1 run_helper loaded $'activating\nactivating\nactive' 0
+[[ $PROGRESS_OUT == $'\r    verifying the install medium:  50%'* && $PROGRESS_OUT == *$'\r    verifying the install medium: 100%'* ]] &&
+  echo "ok: progress is indented by OMARCHY_VERIFY_PROGRESS_INDENT" ||
+  { echo "FAIL: indented progress wrong: $(printf '%q' "$PROGRESS_OUT")"; fails=1; }
 
 # A failed hash ends the progress line without the cosmetic 100%. (The first
 # ActiveState answer is consumed by the inactive check before the wait loop.)

@@ -41,6 +41,7 @@ run() {
 log() { :; }
 vm_running() { true; }
 capture_console() { :; }
+capture_vm_state() { :; }
 type_text() { :; }
 press() { echo "$1" >>"$work/pressed"; }
 # Time passes only in sleep, and is kept in a file because the functions
@@ -165,6 +166,88 @@ if [[ ! -s $work/typed ]] || grep -qv '^us ' "$work/typed"; then
 fi
 echo "ok - the live ISO is typed into as us under a uk install"
 
+# The live boot can take the VT back for tty1's installer after the login
+# prompt has shown: the bootstrap command is typed only at a root prompt, on
+# the VT just selected again, and an attempt that loses its console moves to
+# the next VT instead of typing into the wizard.
+type_text() { echo "$(grep ctrl-alt-f "$work/pressed" | tail -n1) $1" >>"$work/typed"; }
+# tty3's root prompt never shows; tty4's does.
+wait_for_screen() { [[ $(grep ctrl-alt-f "$work/pressed" | tail -n1) != ctrl-alt-f3 ]]; }
+ssh_live_root() { grep -q curl "$work/typed"; }
+: >"$work/pressed"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+((status == 0)) || fail "a lost root prompt on tty3 ended the scenario: $(cat "$work/out")"
+grep -q '^ctrl-alt-f3 curl' "$work/typed" && fail "the bootstrap command was typed where no root prompt showed"
+grep -q '^ctrl-alt-f4 curl' "$work/typed" || fail "the second attempt did not type on tty4: $(cat "$work/typed")"
+echo "ok - the live root bootstrap types only at a root prompt, retrying on the next VT"
+
+# The root prompt is matched in what OCR makes of it: the red "root@" comes
+# out as noise, so the pattern rests on the rest, and the login banner alone
+# ("archiso login: root") must not pass for a shell.
+take bootstrap_live_root_ssh
+ocr_screen() { echo "archiso login:"; }
+wait_for_screen() { grep -qi "$1" <<<"$screen"; }
+ssh_live_root() { grep -q curl "$work/typed"; }
+type_text() { echo "$(grep ctrl-alt-f "$work/pressed" | tail -n1) $1" >>"$work/typed"; }
+screen=$'Omarchy 7.2.8-9-omarchy (tty3)\narchiso login: root\n11 iGarchiso \u00a5 #'
+: >"$work/pressed"; : >"$work/typed"
+run bootstrap_live_root_ssh
+((status == 0)) || fail "the root prompt as OCR reads it was not taken for a shell: $(cat "$work/out")"
+grep -q '^ctrl-alt-f3 curl' "$work/typed" || fail "the bootstrap command was not typed at the root prompt: $(cat "$work/typed")"
+screen=$'Omarchy 7.2.8-9-omarchy (tty3)\narchiso login: root'
+: >"$work/pressed"; : >"$work/typed"
+run bootstrap_live_root_ssh
+grep -q curl "$work/typed" && fail "the bootstrap command was typed at a login banner: $(cat "$work/typed")"
+echo "ok - the root prompt is recognised as OCR reads it, and a login banner is not"
+
+# SSH that never comes up fails after tty3, tty4 and tty5, within a bounded wait.
+wait_for_screen() { true; }
+ssh_live_root() { false; }
+echo 0 >"$work/slept"
+: >"$work/pressed"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+slept=$(<"$work/slept")
+((status == 1)) || fail "a live root SSH that never came up did not fail (status $status)"
+[[ $(grep -c curl "$work/typed") == 3 ]] || fail "expected three bootstrap attempts: $(cat "$work/typed")"
+grep -q '^ctrl-alt-f5 curl' "$work/typed" || fail "the last attempt did not use tty5: $(cat "$work/typed")"
+((slept <= 300)) || fail "three failed live root logins took ${slept}s"
+echo "ok - live root SSH that never comes up fails after three VTs"
+
+# pxe's NBD wait keeps to its 900 s when a load has failed and the return to
+# the menu takes the menu wait's whole time. (The first wait for the menu,
+# before the NBD wait starts, has its own 300 s.)
+take_from "$ROOT/test/integration.d/pxe-test.sh" netboot_into_installer
+SSH_KEY="$work/id_ed25519" RUN_DIR="$work/pxe-run" TFTP_ROOT="$work/tftp" CIDATA_IMG="$work/cidata.img"
+mkdir -p "$RUN_DIR"
+detect_packages() { :; }
+build_cidata() { :; }
+start_vm() { :; }
+qemu-img() { :; }
+nbd_dialed() { false; }
+wait_for_live_root_ssh() { :; }
+bootstrap_live_root_ssh() { :; }
+LIVE_CIDATA_SMBIOS=()
+# The wait at the menu takes all the time it is given, and the load fails
+# 600 s into the NBD wait: a retry that started its own 900 s would take
+# 300 + 600 + 900 s.
+wait_for_screen() { sleep "$2"; }
+: >"$RUN_DIR/serial.log"
+nbd_dialed() {
+  (($(<"$work/slept") >= 300 + 600)) && ! grep -q 'Boot failed' "$RUN_DIR/serial.log" &&
+    echo "Boot failed: press a key to retry" >>"$RUN_DIR/serial.log"
+  return 1
+}
+echo 0 >"$work/slept"
+run netboot_into_installer
+slept=$(<"$work/slept")
+((status == 1)) || fail "a PXE boot that never dials NBD did not fail (status $status)"
+grep -q "Timed out waiting for the guest to dial the NBD export" "$work/out" ||
+  fail "the NBD wait was never reached: $(tail -n3 "$work/out")"
+((slept <= 300 + 900 + 10)) || fail "pxe's 900 s NBD wait took ${slept}s after a failed load"
+echo "ok - pxe's NBD wait keeps to 900 s after a failed load"
+
 # The factory first boot's keyboard step takes English (US) and loads it,
 # so what the form asks for next is typed as us: on uk keys, a password
 # with an @ arrives with a " in its place.
@@ -240,3 +323,68 @@ for setting in FIRMWARE=bios VARIANT=small KB_LAYOUT=uk ENCRYPT=true UKI=true DI
   [[ $(base_dir "$setting") == "$dir" ]] || fail "$setting does not find its own base again"
 done
 echo "ok - each install setting saves and reuses its own base"
+
+# ------------------------------------------- live root SSH from the cidata drive
+#
+# The live ISO's cloud-init reads the cidata drive as NoCloud. Its user-data
+# authorizes the harness key for root, which the image's cloud.cfg would wrap
+# in a "log in as the default user" command (disable_root: true), and creates
+# no default user.
+
+take cidata_cloud_init
+SSH_KEY="$work/id_ed25519"
+mkdir -p "$work/cidata"
+run cidata_cloud_init "$work/cidata"
+((status == 0)) || fail "cidata_cloud_init failed: $(cat "$work/out")"
+grep -qx 'instance-id: .*' "$work/cidata/meta-data" || fail "no NoCloud meta-data on the cidata drive"
+user_data=$(cat "$work/cidata/user-data")
+[[ $(head -n1 <<<"$user_data") == "#cloud-config" ]] || fail "user-data is not cloud-config: $user_data"
+grep -qx 'disable_root: false' <<<"$user_data" || fail "root's key would be disabled: $user_data"
+grep -qx 'users: \[\]' <<<"$user_data" || fail "cloud-init would create its default user: $user_data"
+grep -qxF "  - $(cat "$SSH_KEY.pub")" <<<"$user_data" || fail "the harness key is not authorized: $user_data"
+grep -q 'cidata_cloud_init "\$dir"' "$harness" || fail "build_cidata does not put the cloud-init files on the drive"
+echo "ok - the cidata drive authorizes the harness key for the live ISO's root"
+
+# Both live-SSH waits keep to their budget by the clock, when each refused
+# attempt itself takes ConnectTimeout (5 s).
+take wait_for_live_root_ssh
+ssh_live_root() { sleep 5; false; }
+echo 0 >"$work/slept"
+run wait_for_live_root_ssh 120
+slept=$(<"$work/slept")
+((status == 1)) || fail "live root SSH that never came up did not time out (status $status)"
+((slept <= 120 + 10)) || fail "a 120 s live-SSH wait took ${slept}s"
+take bootstrap_live_root_ssh
+wait_for_screen() { true; }
+echo 0 >"$work/slept"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+slept=$(<"$work/slept")
+((status == 1)) || fail "the live root bootstrap did not fail (status $status)"
+((slept <= 3 * (60 + 10) + 3 * 40)) || fail "three 60 s bootstrap attempts took ${slept}s"
+echo "ok - the live-SSH waits keep to their budget when each attempt takes 5 s"
+
+# ------------------------------------------ the first boot's update units
+#
+# The installer marks updates as applied after its last pacman transaction,
+# so an install from this tree must skip the ConditionNeedsUpdate= units on
+# its first boot. A released ISO from before that change runs them; it is
+# installed only to start an upgrade from, so that is noted, not failed.
+
+take check_first_boot_update_units
+units="$work/first-boot-update-units.txt"
+printf 'Id=ldconfig.service\nConditionResult=no\n\nId=systemd-sysusers.service\nConditionResult=no\n' >"$units"
+RELEASE_ISO=false
+run check_first_boot_update_units "$units"
+((status == 0)) || fail "a first boot that skipped the update units failed: $(cat "$work/out")"
+
+printf 'Id=ldconfig.service\nConditionResult=yes\n\nId=systemd-sysusers.service\nConditionResult=no\n' >"$units"
+run check_first_boot_update_units "$units"
+((status == 1)) || fail "an install from this tree that ran the update units passed (status $status)"
+grep -q "First boot ran the ConditionNeedsUpdate= units" "$work/out" || fail "no message: $(cat "$work/out")"
+
+RELEASE_ISO=true
+run check_first_boot_update_units "$units"
+((status == 0)) || fail "a release ISO that ran the update units failed the install: $(cat "$work/out")"
+grep -q "First boot ran the ConditionNeedsUpdate= units" "$work/out" || fail "the release's first boot was not noted: $(cat "$work/out")"
+echo "ok - only an install from this tree fails for running the first boot's update units"

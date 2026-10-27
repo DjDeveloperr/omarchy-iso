@@ -21,8 +21,7 @@ qemu-img create -f qcow2 "$USED_DISK" 40G >/dev/null
 cp "$OVMF_VARS_TEMPLATE" "$RUN_DIR/OVMF_VARS.4m.fd"
 ACTIVE_OVMF="$RUN_DIR/OVMF_VARS.4m.fd"
 
-mkdir -p "$RUN_DIR/www"
-cat >"$RUN_DIR/www/old-install" <<'EOF'
+cat >"$RUN_DIR/old-install" <<'EOF'
 exec >/dev/ttyS0 2>&1
 set -ex
 disk=/dev/vda
@@ -45,30 +44,18 @@ echo "old-install:"; lsblk -rno NAME,TYPE $disk
 sync
 poweroff
 EOF
-(cd "$RUN_DIR/www" && exec python3 -m http.server "$HTTP_PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
-HTTP_PID=$!
 
 log "Boot 1: leaving an old RAID and LVM install on the disk"
 start_vm "$USED_DISK" "$RUN_DIR/old-install-serial.log" \
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" \
   -device ide-cd,drive=cdrom0,bootindex=2
 
-# The installer owns tty1; tty2 is a root login with no password.
-waited=0
-until { press ctrl-alt-f2; sleep 3; ocr_screen | grep -qi "login:"; }; do
-  if ((waited >= 300)); then
-    capture_console "failure-old-install-console"
-    echo "Timed out waiting for a console login prompt" >&2
-    exit 1
-  fi
-  sleep 5
-  ((waited += 8))
-done
-type_text "root"
-press ret
-sleep 3
-type_text "curl -fsS http://10.0.2.2:$HTTP_PORT/old-install -o /tmp/old-install && bash /tmp/old-install"
-press ret
+# Over SSH, not typed on a console: the live boot can take the VT back for
+# the installer on tty1, and the keystrokes then go into its wizard.
+bootstrap_live_root_ssh
+ssh_live_root 'cat >/tmp/old-install' <"$RUN_DIR/old-install"
+# Detached, so the wait below bounds it; it powers the VM off when done.
+ssh_live_root 'setsid bash /tmp/old-install </dev/null >/dev/null 2>&1 &'
 
 waited=0
 while vm_running; do
@@ -80,8 +67,6 @@ while vm_running; do
   sleep 5
   ((waited += 5))
 done
-kill "$HTTP_PID" 2>/dev/null || true
-HTTP_PID=""
 
 old_layout=$(grep -a -A10 '^old-install:' "$RUN_DIR/old-install-serial.log" || true)
 printf '%s\n' "$old_layout"
