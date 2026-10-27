@@ -7,7 +7,8 @@
 #
 # Ventoy2Disk.sh needs a block device, so this attaches the image to a loop
 # device and mounts the data partition: it runs as root (through sudo when
-# not root already).
+# not root already), with GNU parted and dosfstools, which Ventoy2Disk.sh
+# calls.
 
 set -euo pipefail
 

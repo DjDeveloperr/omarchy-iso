@@ -235,14 +235,24 @@ jobs:
           name: iso-${{ github.run_id }}-x86_64
 
       # The ventoy scenario boots the ISO from a real Ventoy stick. Making
-      # one takes a loop device and a mount, which the test container has
-      # no rights to, so the runner makes it, for the jobs that run every
+      # one takes loop devices and a mount: the runner's own container has
+      # no loop devices, so a privileged container with the host's /dev
+      # makes it, as the ISO build does, for the jobs that run every
       # scenario.
       - name: Make a Ventoy stick with the ISO
         if: matrix.scenarios == ''
         run: |
           mkdir -p ventoy
-          bin/omarchy-iso-test-ventoy-disk release/*.iso ventoy/ventoy.img
+          docker run --rm --privileged -v /dev:/dev -v "$PWD:/w" -w /w \
+            ghcr.io/archlinux/archlinux:latest bash -euo pipefail -c '
+              if ! grep -qw landlock /sys/kernel/security/lsm 2>/dev/null; then
+                printf "#!/bin/sh\nexec /usr/bin/pacman --disable-sandbox \"\$@\"\n" >/usr/local/bin/pacman
+                chmod 0755 /usr/local/bin/pacman
+              fi
+              sed -i "1i Server = https://mirror.omarchy.org/\$repo/os/\$arch" /etc/pacman.d/mirrorlist
+              pacman -Sy --noconfirm --needed parted dosfstools >/dev/null
+              bin/omarchy-iso-test-ventoy-disk release/*.iso ventoy/ventoy.img
+            '
 
       # The harness runs in an Arch container: Arch's current QEMU and OVMF
       # (QEMU 11) instead of the runner's older one, at the paths the
