@@ -215,6 +215,26 @@ grep -q '^ctrl-alt-f5 curl' "$work/typed" || fail "the last attempt did not use 
 ((slept <= 300)) || fail "three failed live root logins took ${slept}s"
 echo "ok - live root SSH that never comes up fails after three VTs"
 
+# A press that lands while GRUB shows its menu stops the countdown: on a
+# luks-calibration run the VM sat at the menu until the 300 s ran out. The
+# menu stays until something boots its entry.
+ocr_screen() {
+  if grep -qx ret "$work/pressed"; then
+    echo "archiso login:"
+  else
+    printf '%s\n' "GNU GRUB version 2:2. 18-1" "Try Qmarchy (xe 64, xf4 UEFTI"
+  fi
+}
+wait_for_screen() { true; }
+ssh_live_root() { true; }
+echo 0 >"$work/slept"
+: >"$work/pressed"
+: >"$work/typed"
+run bootstrap_live_root_ssh
+((status == 0)) || fail "a stopped GRUB countdown ended the scenario: $(cat "$work/out")"
+[[ $(sed -n 2p "$work/pressed") == ret ]] || fail "the menu was not booted at the first sight of it: $(paste -sd' ' "$work/pressed")"
+echo "ok - the live root bootstrap boots GRUB's entry when its countdown stopped"
+
 # pxe's NBD wait keeps to its 900 s when a load has failed and the return to
 # the menu takes the menu wait's whole time. (The first wait for the menu,
 # before the NBD wait starts, has its own 300 s.)

@@ -647,14 +647,19 @@ EOF
   # on screen before the command is typed, the VT is selected again right
   # before each line, and an attempt that still loses its console moves to a
   # fresh getty (tty3, tty4, tty5), as bootstrap_ssh does.
-  local attempt vt waited deadline up=false
+  local attempt vt waited deadline seen up=false
   for attempt in 1 2 3; do
     vt=$((attempt + 2))
     waited=0
     while true; do
       press "ctrl-alt-f$vt"
       sleep 4
-      ocr_screen | grep -qi "login:" && break
+      seen=$(ocr_screen)
+      grep -qi "login:" <<<"$seen" && break
+      # On x86_64 GRUB shows its menu for 3 s and stops counting at the first
+      # key, which the press above can be: boot the entry it highlights,
+      # Install, as the timeout would have.
+      grep -q "GNU GRUB" <<<"$seen" && press ret
       ((waited += 8))
 
       if ((waited >= 300)); then
