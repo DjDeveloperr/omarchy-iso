@@ -203,17 +203,23 @@ jobs:
           # Reinstalls over a disk the base install has used, and over
           # firmware with a full NVRAM. live-lowmem boots the live ISO with
           # the UEFI variables the shared install leaves, so it runs after
-          # one. used-disk also installs with LUKS, as the encrypted job did.
+          # one. used-disk and full-nvram also install with LUKS, as the
+          # encrypted job did.
           - variant: default-reinstall
             scenarios: used-disk full-nvram live-lowmem
           - variant: encrypted-reinstall
-            scenarios: used-disk
+            scenarios: used-disk full-nvram
             env: OMARCHY_INTEGRATION_ENCRYPT=true
           # The live ISO, without the shared install: pxe installs over the
           # network itself, the others stop before any disk is formatted.
           - variant: live-pxe
             scenarios: pxe
             live: true
+          # pxe installs, so it runs encrypted too, as the encrypted job did.
+          - variant: live-pxe-encrypted
+            scenarios: pxe
+            live: true
+            env: OMARCHY_INTEGRATION_ENCRYPT=true
           - variant: live-media
             scenarios: slow-medium corrupt-image
             live: true
