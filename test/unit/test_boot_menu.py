@@ -136,6 +136,16 @@ class Theme(unittest.TestCase):
             self.assertRegex(theme_cfg, rf"for font in [\w -]*\b{font}\b", f"{font} is not loaded")
             self.assertRegex(self.builder, rf"for size in [\d ]*\b{size}\b", f"{font} is not built")
 
+    def test_the_menu_holds_both_entries(self):
+        menu = self.theme[self.theme.index("+ boot_menu"):]
+        value = lambda key: int(re.search(rf"\b{key} = (\d+)\b", menu).group(1))
+        # Install and Try, with no scrolling at any resolution. GRUB's list takes
+        # the selection box's edges (select_n/select_s, 1 px each, built by
+        # builder/boot-menu-theme.sh) off its height before it counts rows.
+        edges = 2
+        self.assertIn('for part in n ne e se s sw c; do\n    magick -size 1x1', self.builder)
+        self.assertEqual(value("height"), 2 * value("item_height") + value("item_spacing") + edges)
+
     def test_entries_are_readable(self):
         background = re.search(r'desktop-color: "(#[0-9a-f]{6})"', self.theme).group(1)
         for key in ("item_color", "selected_item_color"):
