@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GRUB = ROOT / "configs/grub"
 SYSLINUX = ROOT / "configs/syslinux"
 THEME = GRUB / "themes/omarchy/theme.txt"
+THEME_CFG = GRUB / "theme.cfg"
 THEME_BUILDER = ROOT / "builder/boot-menu-theme.sh"
 
 
@@ -129,11 +130,11 @@ class Theme(unittest.TestCase):
             self.assertRegex(output, r"^PNG(24|32):", output)
 
     def test_every_font_the_theme_names_is_built_and_loaded(self):
-        grub_cfg = (GRUB / "grub.cfg").read_text()
+        theme_cfg = THEME_CFG.read_text()
         for family, weight, size in re.findall(r'"(JetBrains Mono) (Regular|Bold) (\d+)"', self.theme):
-            pf2 = f"jetbrains-mono-{weight.lower()}-{size}.pf2"
-            self.assertIn(f"/boot/grub/themes/omarchy/{pf2}", grub_cfg, f"{pf2} is not loaded")
-            self.assertRegex(self.builder, rf"for size in [\d ]*\b{size}\b", f"{pf2} is not built")
+            font = f"jetbrains-mono-{weight.lower()}-{size}"
+            self.assertRegex(theme_cfg, rf"for font in [\w -]*\b{font}\b", f"{font} is not loaded")
+            self.assertRegex(self.builder, rf"for size in [\d ]*\b{size}\b", f"{font} is not built")
 
     def test_entries_are_readable(self):
         background = re.search(r'desktop-color: "(#[0-9a-f]{6})"', self.theme).group(1)
@@ -144,10 +145,22 @@ class Theme(unittest.TestCase):
             # not find "Try Omarchy".
             self.assertGreaterEqual(contrast(color, background), 4.5, f"{key} {color} on {background}")
 
-    def test_the_menu_loads_the_theme_only_where_it_is(self):
-        grub_cfg = (GRUB / "grub.cfg").read_text()
-        self.assertIn("if [ -f /boot/grub/themes/omarchy/theme.txt ]; then", grub_cfg)
-        self.assertIn("export theme", grub_cfg)
+    def test_both_menus_load_the_theme(self):
+        # A stick boots grub.cfg; an ISO file booted by another GRUB (Ventoy's
+        # GRUB2 mode, a grub.cfg with loopback) boots loopback.cfg.
+        for cfg in ("grub.cfg", "loopback.cfg"):
+            self.assertRegex((GRUB / cfg).read_text(), r"(?m)^\s*source /boot/grub/theme\.cfg$", cfg)
+
+    def test_the_theme_is_set_only_with_its_fonts(self):
+        theme_cfg = THEME_CFG.read_text()
+        # Only media that carry it (x86_64), and only when every font loads:
+        # a signed GRUB under Secure Boot refuses unsigned fonts, and the menu
+        # then keeps the look it has rather than a theme without its fonts.
+        self.assertIn('if [ -f "$omarchy_theme/theme.txt" ]; then', theme_cfg)
+        self.assertRegex(theme_cfg, r'if ! loadfont "\$omarchy_theme/\$font\.pf2"; then\s+omarchy_theme=')
+        set_at = theme_cfg.index('set theme="$omarchy_theme/theme.txt"')
+        self.assertLess(theme_cfg.index('if [ -n "$omarchy_theme" ]; then'), set_at)
+        self.assertIn("export theme", theme_cfg[set_at:])
 
 
 if __name__ == "__main__":
