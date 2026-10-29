@@ -77,7 +77,7 @@
   "progress.tip.localSend": "Del filer med telefoner og bærbare med LocalSend",
   "progress.tip.webApps": "Gjør et nettsted til en app med Installer > Nettapp i menyen",
   "progress.tip.terminal": "Super + Return åpner en terminal, Super + Shift + Return nettleseren",
-  "progress.tip.media": "Rediger bilder i Pinta, klipp video i Omacut og dokumenter i LibreOffice",
+  "progress.tip.media": "Bilder i Pinta, klipp video i Omacut, dokumenter i LibreOffice",
   "progress.tip.presentations": "Gjør en Markdown-fil om til en presentasjon med Hype",
   "progress.tip.webcam": "Ta opp deg selv med webkameraet i Monologue",
   "progress.tip.ocr": "Super + Ctrl + Print henter tekst fra skjermen med OCR",
