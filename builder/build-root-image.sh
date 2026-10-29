@@ -242,10 +242,13 @@ sync
 mkdir -p "$root/etc/kernel" "$root/etc/mkinitcpio.d" "$root/var/lib/omarchy-iso"
 # systemd.tty.term.console=dumb: see CONSOLE_NO_ANSI_QUERY in the orchestrator
 # (systemd's console size query hangs 1 boot in 10 with Plymouth on the VT).
+# console=tty0: without a console= of its own, systemd-stub adds the firmware's
+# serial console when the firmware reports one (OVMF in QEMU does), and
+# Plymouth then draws the unlock prompt as text (omacom/omarchy#11337).
 # This embedded cmdline is what boots under Secure Boot, where Limine's entry
 # options are ignored.
 cat >"$root/etc/kernel/cmdline" <<'CMDLINE'
-zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs initramfs_async=0 quiet splash loglevel=0 systemd.show_status=false rd.udev.log_level=0 vt.global_cursor_default=0 systemd.tty.term.console=dumb
+zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs initramfs_async=0 quiet splash loglevel=0 systemd.show_status=false rd.udev.log_level=0 vt.global_cursor_default=0 systemd.tty.term.console=dumb console=tty0
 CMDLINE
 
 # The preset names the kernel version explicitly: mkinitcpio treats a glob in
