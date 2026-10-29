@@ -78,7 +78,10 @@ def main() -> int:
         error(f"Configuration error: {e}")
         return 2
 
-    who = ctx.username or "deferred provisioning (user created at first boot)"
+    if ctx.appliance:
+        who = "an appliance (owner created when it is adopted)"
+    else:
+        who = ctx.username or "deferred provisioning (user created at first boot)"
     info(f"Installing Omarchy for {who} → {ctx.target}")
 
     from .phases_impl import (

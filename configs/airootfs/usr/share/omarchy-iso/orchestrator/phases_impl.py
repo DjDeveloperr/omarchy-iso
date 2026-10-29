@@ -2446,6 +2446,15 @@ PROVISION_KEYFILE = "etc/omarchy/provisioning.key"
 PROVISION_KEY_DROPIN = "etc/mkinitcpio.conf.d/99-omarchy-provisioning-key.conf"
 NODE_PACKAGES_DIR = Path("/opt/packages")
 
+# An appliance install waits to be adopted instead of arming first-boot setup:
+# root takes the adopting computer's key, sshd accepts root by key only, and
+# avahi advertises the machine as _omarchy-adopt._tcp. The runtime's
+# omarchy-provision-owner --from-file removes all of it once the owner exists.
+APPLIANCE_MARKER = f"{PROVISION_STATE_DIR}/appliance"
+ADOPT_AVAHI_SERVICE = "etc/avahi/services/omarchy-adopt.service"
+ADOPT_SSHD_DROPIN = "etc/ssh/sshd_config.d/20-omarchy-adopt.conf"
+ADOPT_ROOT_KEYS = "root/.ssh/authorized_keys"
+
 
 def stage_provisioning_state(ctx: InstallContext) -> None:
     # World-readable: first-boot finalization reads the Node tarball as the
@@ -2468,9 +2477,14 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
             "Update the runtime package this ISO bundles before installing in deferred provisioning."
         )
 
-    info("› arming first-boot setup")
     (provisioning_dir / "pending").touch()
 
+    if ctx.appliance:
+        info("› waiting for adoption instead of first-boot setup")
+        _stage_adoption(ctx)
+        return
+
+    info("› arming first-boot setup")
     unit_dst = ctx.target / "etc/systemd/system/omarchy-provision-owner.service"
     unit_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(service_src, unit_dst)
@@ -2482,6 +2496,49 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
 
     if _provision_install_encrypted(ctx):
         _stage_provisioning_luks_unlock(ctx, provisioning_dir)
+
+
+def _stage_adoption(ctx: InstallContext) -> None:
+    (ctx.target / APPLIANCE_MARKER).touch()
+
+    service = ctx.target / ADOPT_AVAHI_SERVICE
+    service.parent.mkdir(parents=True, exist_ok=True)
+    service.write_text(_adopt_avahi_service(_adopt_txt_records(ctx)))
+
+
+def _adopt_txt_records(ctx: InstallContext, dmi: Path = Path("/sys/class/dmi/id")) -> dict[str, str]:
+    """What the adopting computer shows before it connects. The installer runs
+    on the machine being installed, so its DMI and platform are the target's."""
+    records = {"platform": hw_platform() or platform.machine()}
+    try:
+        model = (dmi / "product_name").read_text().strip()
+    except OSError:
+        model = ""
+    if model:
+        records["model"] = model
+    try:
+        records["version"] = (ctx.target / "usr/share/omarchy/version").read_text().strip()
+    except OSError:
+        pass
+    return records
+
+
+def _adopt_avahi_service(txt: dict[str, str]) -> str:
+    from xml.sax.saxutils import escape
+
+    records = "".join(f"    <txt-record>{escape(f'{key}={value}')}</txt-record>\n" for key, value in txt.items())
+    return (
+        '<?xml version="1.0" standalone="no"?>\n'
+        '<!DOCTYPE service-group SYSTEM "avahi-service.dtd">\n'
+        "<service-group>\n"
+        '  <name replace-wildcards="yes">%h</name>\n'
+        "  <service>\n"
+        "    <type>_omarchy-adopt._tcp</type>\n"
+        "    <port>22</port>\n"
+        f"{records}"
+        "  </service>\n"
+        "</service-group>\n"
+    )
 
 
 # build-iso.sh bundles the build for the CPU the ISO runs on, and only for a
@@ -3027,6 +3084,19 @@ def configure_login(ctx: InstallContext) -> None:
     autologin = ctx.target / "etc" / "systemd" / "system" / "getty@tty1.service.d" / "autologin.conf"
     autologin.unlink(missing_ok=True)
 
+    if ctx.appliance:
+        # Headless until adopted. The adopting computer chooses desktop or
+        # headless; the runtime's own setup enabled SDDM, so turn it back off.
+        subprocess.run(
+            ["arch-chroot", str(ctx.target), "systemctl", "disable", "sddm.service"],
+            check=False, capture_output=True,
+        )
+        subprocess.run(
+            ["arch-chroot", str(ctx.target), "systemctl", "set-default", "multi-user.target"],
+            check=True,
+        )
+        return
+
     subprocess.run(
         ["arch-chroot", str(ctx.target), "systemctl", "enable", "sddm.service"],
         check=False, capture_output=True,
@@ -3046,7 +3116,26 @@ def configure_ssh_access(ctx: InstallContext) -> None:
 
     keys = _authorized_keys(ctx.authorized_keys_path)
 
-    if ctx.defer_provisioning:
+    if ctx.appliance:
+        # The adopting computer logs in as root, by key only, to create the
+        # owner; omarchy-provision-owner --from-file removes this access.
+        info(f"› authorizing {len(keys)} adopting SSH key(s) for root")
+        ssh_dir = ctx.target / "root" / ".ssh"
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        ssh_dir.chmod(0o700)
+        root_keys = ctx.target / ADOPT_ROOT_KEYS
+        root_keys.write_text("".join(f"{key}\n" for key in keys))
+        root_keys.chmod(0o600)
+
+        dropin = ctx.target / ADOPT_SSHD_DROPIN
+        dropin.parent.mkdir(parents=True, exist_ok=True)
+        dropin.write_text(
+            "# Waiting to be adopted: root by key only. Removed once the owner exists.\n"
+            "PermitRootLogin prohibit-password\n"
+            "PasswordAuthentication no\n"
+            "KbdInteractiveAuthentication no\n"
+        )
+    elif ctx.defer_provisioning:
         # No user to authorize yet. Stage the keys in provisioning state for
         # omarchy-provision-owner to install once first boot creates the owner, and
         # still open the door (sshd + ufw) below.
@@ -3597,6 +3686,14 @@ def _validate_provisioning_state(ctx: InstallContext) -> None:
     if not (provisioning_dir / "pending").exists():
         raise RuntimeError(f"deferred-provisioning install but {provisioning_dir / 'pending'} is missing")
 
+    if ctx.appliance:
+        # Adoption over SSH stands in for first-boot setup; without any one of
+        # these the machine boots unreachable.
+        for required in (APPLIANCE_MARKER, ADOPT_ROOT_KEYS, ADOPT_SSHD_DROPIN, ADOPT_AVAHI_SERVICE):
+            if not (ctx.target / required).exists():
+                raise RuntimeError(f"appliance install but {ctx.target / required} is missing")
+        return
+
     link = ctx.target / "etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service"
     if not link.is_symlink():
         raise RuntimeError("deferred-provisioning install but omarchy-provision-owner.service is not enabled")
@@ -3801,6 +3898,10 @@ FACTORY_SCRUB_PATHS = (
     "etc/tailscale/authkey",
     "etc/systemd/system/omarchy-tailscale-join.service",
     "etc/systemd/system/multi-user.target.wants/omarchy-tailscale-join.service",
+    APPLIANCE_MARKER,
+    ADOPT_ROOT_KEYS,
+    ADOPT_SSHD_DROPIN,
+    ADOPT_AVAHI_SERVICE,
 )
 
 

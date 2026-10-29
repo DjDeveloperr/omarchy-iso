@@ -41,6 +41,7 @@ class InstallContext:
     arch_config_path: Path
     omarchy_install: dict[str, Any]
     defer_provisioning: bool = False
+    appliance: bool = False
 
     target: Path = Path("/mnt")
     omarchy_path: Path = Path("/usr/share/omarchy")
@@ -79,7 +80,13 @@ class InstallContext:
         # an `defer-provisioning` marker file on an autoinstall drive, which also replaces the
         # user_credentials.json requirement.
         defer_provisioning_marker = _optional_path(os.environ.get("OMARCHY_INSTALL_DEFER_PROVISIONING_FILE"))
-        defer_provisioning = bool(omarchy_install.get("defer_provisioning")) or defer_provisioning_marker is not None
+        # An appliance (omarchy_install.appliance, written by an appliance
+        # image's configurator) is a deferred install whose owner arrives over
+        # SSH: the adopting computer creates it with omarchy-provision-owner.
+        appliance = bool(omarchy_install.get("appliance"))
+        defer_provisioning = (
+            bool(omarchy_install.get("defer_provisioning")) or defer_provisioning_marker is not None or appliance
+        )
         omarchy_install["defer_provisioning"] = defer_provisioning
 
         if creds_path.exists():
@@ -136,8 +143,11 @@ class InstallContext:
             arch_config_path=arch_config_path,
             omarchy_install=omarchy_install,
             defer_provisioning=defer_provisioning,
+            appliance=appliance,
             state_dir=state_dir,
         )
+        if appliance:
+            _validate_appliance(ctx, arch_configuration)
         disk_config = user_configuration.get("disk_config", {})
         target_mount = omarchy_install.get("target_mount") or disk_config.get("mountpoint")
         if target_mount:
@@ -163,6 +173,16 @@ class InstallContext:
     @property
     def is_protected(self) -> bool:
         return self.mode == "protected"
+
+
+def _validate_appliance(ctx: "InstallContext", arch_configuration: dict) -> None:
+    """Refuse an appliance install that could not be adopted: one without the
+    adopting computer's key would boot into a machine nobody can reach, and an
+    encrypted one would wait at boot for a passphrase nobody is there to type."""
+    if ctx.authorized_keys_path is None:
+        raise RuntimeError("appliance install needs the adopting computer's SSH key (authorized_keys)")
+    if ctx.encrypt or (arch_configuration.get("disk_config") or {}).get("disk_encryption"):
+        raise RuntimeError("appliance installs are unencrypted: nobody is at the machine to unlock it at boot")
 
 
 def _strip_account_fields(arch_configuration: dict) -> None:
