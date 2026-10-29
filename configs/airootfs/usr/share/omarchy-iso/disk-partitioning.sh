@@ -175,6 +175,15 @@ rollback_created_parts() {
   created_parts=()
 }
 
+# Whether a disk is removable, on USB, or an SD card, from lsblk's NAME, RM and
+# TRAN columns. install_disk_candidates lists these last; an appliance install
+# never erases one.
+disk_is_external() {
+  local name=$1 removable=$2 tran=${3:-} sysfs=${SYSFS_BLOCK:-/sys/block}
+  [[ $removable == 1 || $tran == usb ]] ||
+    [[ $(cat "$sysfs/${name##*/}/device/type" 2>/dev/null) == SD ]]
+}
+
 # The disks the installer offers, one per line, in the order the disk screen
 # lists them. gum highlights the first entry, so that is the default a user
 # confirms with Enter: internal disks come first, then removable and USB ones
@@ -195,10 +204,7 @@ install_disk_candidates() {
       [[ $name =~ ^/dev/(sd|hd|vd|nvme|mmcblk|xv) ]] || continue
       [[ $name =~ ^/dev/mmcblk[0-9]+(boot[0-9]+|rpmb)$ ]] && continue
       external=0
-      if [[ $removable == 1 || $tran == usb ]] ||
-        [[ $(cat "$sysfs/${name##*/}/device/type" 2>/dev/null) == SD ]]; then
-        external=1
-      fi
+      disk_is_external "$name" "$removable" "$tran" && external=1
       printf '%s\t%s\t%s\n' "$external" "$n" "$name"
     done |
     sort -k1,1n -k2,2n | cut -f3

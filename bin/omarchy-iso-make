@@ -8,6 +8,7 @@ LOCAL_OMARCHY_PATH=""
 LOCAL_PKGS_PATH=""
 OMARCHY_ARCH="${OMARCHY_ARCH:-x86_64}"
 N1X_DEV_SSH_KEY=""
+APPLIANCE_KEY=""
 PACKAGE_DIR=""
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -28,6 +29,18 @@ while [[ $# -gt 0 ]]; do
     N1X_DEV_SSH_KEY="${2:-}"
     if [[ -z $N1X_DEV_SSH_KEY ]]; then
       echo "Error: --dev-ssh requires a public key file" >&2
+      exit 1
+    fi
+    shift 2
+    ;;
+  --appliance)
+    # An image that installs with no questions and leaves the machine waiting
+    # to be adopted over SSH by the computer holding this key (omarchy device
+    # adopt). Its configurator erases the internal disk after a countdown any
+    # key cancels.
+    APPLIANCE_KEY="${2:-}"
+    if [[ -z $APPLIANCE_KEY ]]; then
+      echo "Error: --appliance requires the adopting computer's public key file" >&2
       exit 1
     fi
     shift 2
@@ -92,12 +105,21 @@ while [[ $# -gt 0 ]]; do
     ;;
   *)
     echo "Unknown option: $1"
-    echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
-    echo "       $0 --arch aarch64 [--edge|--rc] [--package-dir DIR] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
+    echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--appliance <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>]"
+    echo "       $0 --arch aarch64 [--edge|--rc] [--package-dir DIR] [--dev-ssh <pubkey>] [--appliance <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
     exit 1
     ;;
   esac
 done
+
+if [[ -n $APPLIANCE_KEY ]]; then
+  [[ -f $APPLIANCE_KEY ]] || { echo "Error: SSH public key not found at $APPLIANCE_KEY" >&2; exit 1; }
+  APPLIANCE_KEY=$(realpath "$APPLIANCE_KEY")
+  if ! grep -Eq '^(ssh-|ecdsa-|sk-)' "$APPLIANCE_KEY" || grep -Evq '^(ssh-|ecdsa-|sk-|#|$)' "$APPLIANCE_KEY"; then
+    echo "Error: $APPLIANCE_KEY must hold public keys only, one per line" >&2
+    exit 1
+  fi
+fi
 
 if [[ -n $LOCAL_OMARCHY_PATH ]]; then
   [[ -d $LOCAL_OMARCHY_PATH ]] || { echo "Error: Omarchy checkout not found at $LOCAL_OMARCHY_PATH" >&2; exit 1; }
@@ -206,6 +228,7 @@ DOCKER_ARGS=(
   -e "OMARCHY_ARCH=$OMARCHY_ARCH"
   -e "OMARCHY_KERNEL=$OMARCHY_KERNEL"
   -e "OMARCHY_N1X_DEV_SSH=${N1X_DEV_SSH_KEY:+1}"
+  -e "OMARCHY_APPLIANCE=${APPLIANCE_KEY:+1}"
   # Optional overrides of the Omarchy package pair build-iso.sh installs, e.g.
   # the release recipes (omarchy, omarchy-settings) built from --local-source
   # instead of the -dev ones that track quattro.
@@ -233,6 +256,10 @@ fi
 
 if [[ -n $N1X_DEV_SSH_KEY ]]; then
   DOCKER_ARGS+=(-v "$N1X_DEV_SSH_KEY:/dev-ssh/authorized_keys:ro")
+fi
+
+if [[ -n $APPLIANCE_KEY ]]; then
+  DOCKER_ARGS+=(-v "$APPLIANCE_KEY:/appliance/authorized_keys:ro")
 fi
 
 # The host pacman cache belongs to the host architecture; sharing it with an
@@ -270,9 +297,9 @@ fi
 
 latest_iso=$(\ls -t "$BUILD_RELEASE_PATH"/*.iso | head -n1)
 if [[ $OMARCHY_ARCH == aarch64 ]]; then
-  iso_ref="${latest_iso%.*}${N1X_DEV_SSH_KEY:+-devssh}-$OMARCHY_ISO_REF.iso"
+  iso_ref="${latest_iso%.*}${N1X_DEV_SSH_KEY:+-devssh}${APPLIANCE_KEY:+-appliance}-$OMARCHY_ISO_REF.iso"
 else
-  iso_ref="${latest_iso%.*}-$OMARCHY_ISO_REF.iso"
+  iso_ref="${latest_iso%.*}${APPLIANCE_KEY:+-appliance}-$OMARCHY_ISO_REF.iso"
 fi
 mv -f "$latest_iso" "$iso_ref"
 

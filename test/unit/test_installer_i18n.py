@@ -19,6 +19,7 @@ I18N = SHARE / "i18n"
 SOURCES = (
     ROOT / "configs/airootfs/root/configurator",
     ROOT / "configs/airootfs/usr/local/bin/omarchy-install-dashboard",
+    ROOT / "configs/airootfs/usr/share/omarchy-iso/appliance.sh",
 )
 OMARCHY_CANDIDATES = (
     Path(os.environ.get("OMARCHY_PATH", "/nonexistent")),

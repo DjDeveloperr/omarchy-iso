@@ -106,5 +106,10 @@
   "failure.pressEnter": "Press Enter to continue…",
   "failure.noUploader": "No log uploader is available in this environment.",
   "failure.installLog": "Install log: %1",
-  "failure.targetLog": "Target log: %1"
+  "failure.targetLog": "Target log: %1",
+  "appliance.title": "Omarchy appliance install",
+  "appliance.erase": "This erases %1 and installs Omarchy with no questions.",
+  "appliance.adopt": "Then adopt it from your computer: omarchy device adopt %1",
+  "appliance.cancel": "Press any key to cancel and choose what to install instead.",
+  "appliance.countdown": "Erasing in %1 seconds"
 }

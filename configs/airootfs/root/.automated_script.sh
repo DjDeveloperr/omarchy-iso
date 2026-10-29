@@ -134,11 +134,29 @@ cd /root
 # Autoinstall: a cidata drive carrying the configurator's own output files
 # stands in for the wizard. omarchy-cidata-load copies them into /root and
 # everything downstream runs the ordinary path against ordinary inputs.
+appliance_keys=/usr/share/omarchy-iso/appliance/authorized_keys
 if /usr/local/bin/omarchy-cidata-load; then
   echo "Autoinstall configuration found on cidata drive; skipping the configurator."
   export OMARCHY_UI_INTERACTIVE=no
 else
+  # An appliance image (omarchy-iso-make --appliance) carries the key of the
+  # computer that adopts it. The configurator installs with no questions unless
+  # its countdown is cancelled, which falls back to the ordinary wizard.
+  if [[ -s $appliance_keys ]]; then
+    export OMARCHY_APPLIANCE=1
+  fi
   ./configurator
+fi
+
+# The configurator records whether it took the appliance path. Only then does
+# the image's adopting key go to the installer (a cidata drive asking for an
+# appliance brings its own), and the install runs to its reboot with nobody at
+# the screen.
+if [[ "$(jq -r '.omarchy_install.appliance // false' /root/user_configuration.json 2>/dev/null)" == "true" ]]; then
+  if [[ ! -s /root/authorized_keys && -s $appliance_keys ]]; then
+    install -m 0600 "$appliance_keys" /root/authorized_keys
+  fi
+  export OMARCHY_UI_INTERACTIVE=no
 fi
 
 # Deferred-provisioning installs skip the celebration/reboot prompt and reboot on

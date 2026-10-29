@@ -289,6 +289,11 @@ if [[ -n ${OMARCHY_N1X_DEV_SSH:-} ]]; then
   ln -sf /etc/systemd/system/omarchy-n1x-dev-ssh.service "$build_cache_dir/airootfs/etc/systemd/system/multi-user.target.wants/omarchy-n1x-dev-ssh.service"
   printf '%s\n' 'file_permissions["/usr/local/sbin/omarchy-n1x-dev-ssh"]="0:0:755"' >>"$build_cache_dir/profiledef.sh"
 fi
+if [[ -n ${OMARCHY_APPLIANCE:-} ]]; then
+  # --appliance: the adopting computer's key. Its presence is what turns the
+  # configurator into a no-questions appliance install (.automated_script.sh).
+  install -Dm0644 /appliance/authorized_keys "$build_cache_dir/airootfs/usr/share/omarchy-iso/appliance/authorized_keys"
+fi
 cat > "$build_cache_dir/airootfs/usr/share/omarchy-iso/package-targets" <<EOF
 OMARCHY_RUNTIME_PACKAGE=$OMARCHY_RUNTIME_PACKAGE
 OMARCHY_SETTINGS_PACKAGE=$OMARCHY_SETTINGS_PACKAGE

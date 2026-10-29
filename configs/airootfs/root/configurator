@@ -35,6 +35,17 @@ if [[ ! -r $DISK_PARTITIONING ]]; then
 fi
 source "$DISK_PARTITIONING"
 
+# Appliance installs (omarchy-iso-make --appliance): no questions, owner adopted
+# later over SSH.
+APPLIANCE="${APPLIANCE:-/usr/share/omarchy-iso/appliance.sh}"
+[[ -r $APPLIANCE ]] ||
+  APPLIANCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../usr/share/omarchy-iso/appliance.sh"
+if [[ ! -r $APPLIANCE ]]; then
+  echo "ERROR: appliance helpers not found at $APPLIANCE" >&2
+  exit 1
+fi
+source "$APPLIANCE"
+
 # Installer strings in the language picked on the first screen; t <key> [args].
 INSTALLER_I18N="${INSTALLER_I18N:-/usr/share/omarchy-iso/i18n.sh}"
 [[ -r $INSTALLER_I18N ]] ||
@@ -1201,6 +1212,7 @@ select_installation() {
 # STEP 1: KEYBOARD (Ctrl+C here arms deferred provisioning and jumps to disk selection)
 
 defer_provisioning=false
+appliance=false
 install_target="full_disk"
 
 # Let the live VT reach its settled width before the first screen so the logo
@@ -1208,9 +1220,24 @@ install_target="full_disk"
 wait_for_stable_terminal
 i18n_console_font "$(tty 2>/dev/null)"
 
-greeter
+# An appliance image installs onto the internal disk with no questions, after a
+# countdown any key cancels. The machine has no owner until another computer
+# adopts it over SSH with the key the image carries, so it is a deferred
+# install, unencrypted because nobody is there to unlock it at boot.
+if [[ -n ${OMARCHY_APPLIANCE:-} ]]; then
+  appliance_boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+  appliance_name=$(appliance_hostname)
+  if disk=$(appliance_disk "$(get_root_disk "$appliance_boot_source")") &&
+    appliance_countdown "$disk" "$appliance_name"; then
+    appliance=true
+    defer_provisioning=true
+  fi
+fi
 
-language_form
+if ! $appliance; then
+  greeter
+  language_form
+fi
 
 $defer_provisioning || keyboard_form
 
@@ -1237,13 +1264,20 @@ if $defer_provisioning; then
   hostname="omarchy"
   timezone="UTC"
 
-  # Jump straight to disk selection + overwrite confirmation (encrypted by
-  # default, Ctrl+C toggles unencrypted). deferred provisioning is always a full-disk install.
-  disk_form
-  stage_qualcomm_firmware
-  until confirm_disk_overwrite; do
+  if $appliance; then
+    # The disk was chosen and its erase confirmed by the countdown.
+    hostname=$appliance_name
+    encrypt_installation=false
+    stage_qualcomm_firmware
+  else
+    # Jump straight to disk selection + overwrite confirmation (encrypted by
+    # default, Ctrl+C toggles unencrypted). deferred provisioning is always a full-disk install.
     disk_form
-  done
+    stage_qualcomm_firmware
+    until confirm_disk_overwrite; do
+      disk_form
+    done
+  fi
   install_target="full_disk"
 else
   disk_form
@@ -1334,6 +1368,7 @@ cat <<-_EOF_ >user_configuration.json
         "language": "$language",
         "mode": "full_disk",
         "defer_provisioning": $defer_provisioning,
+        "appliance": $appliance,
         "target_mount": "/mnt",
         "boot": {
             "esp_mount": "/boot",
